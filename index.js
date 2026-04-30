@@ -643,7 +643,7 @@ bot.action("terms", async (ctx) => {
     [
       "<b>📌 Terms</b>",
       "",
-      "Crypto payments are final and cannot be reversed.",
+      "We offer full refunds if you are not satisfied with the bot.",
       "Always send funds using the correct coin and network.",
       "Trading involves risk and results are not guaranteed.",
       "If you need help, contact @qevybtc.",

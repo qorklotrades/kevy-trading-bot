@@ -634,7 +634,7 @@ bot.action("updates", async (ctx) => {
     [
       "<b>🔔 Updates</b>",
       "",
-      "Updates channel: TELEGRAMUPDATESLINKHERE",
+      "Updates channel: https://t.me/kevybotupdates",
     ].join("\n"),
     {
       parse_mode: "HTML",

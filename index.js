@@ -54,6 +54,79 @@ function formatTimestamp(value) {
   }).format(new Date(value));
 }
 
+function getStatusExplanation(status) {
+  const cleanStatus = String(status || "unknown").toLowerCase();
+
+  const statuses = {
+    waiting: "Waiting for payment",
+    confirming: "Payment detected and confirming on the blockchain",
+    confirmed: "Payment confirmed and processing",
+    sending: "Payment confirmed and finalising",
+    finished: "Payment successful",
+    partially_paid: "Partially paid - contact support @qevybtc",
+    failed: "Payment failed - contact support @qevybtc",
+    expired: "Payment expired - create a new payment",
+    cancelled: "Payment cancelled - contact support @qevybtc",
+    wrong_asset_confirmed: "Wrong coin or network detected - contact support @qevybtc",
+  };
+
+  return statuses[cleanStatus] || cleanStatus;
+}
+
+function getUserStatusMessage(status) {
+  const cleanStatus = String(status || "").toLowerCase();
+
+  const messages = {
+    confirming: "Payment detected. It is confirming on the blockchain.",
+    confirmed: "Payment confirmed. Finalising your access...",
+    sending: "Payment confirmed. Finalising your access...",
+    partially_paid: "Your payment was received, but it was not the full amount. Please contact @qevybtc.",
+    failed: "Your payment failed. Please contact @qevybtc.",
+    expired: "Your payment has expired. Please press Get Access to create a new payment.",
+    cancelled: "Your payment was cancelled. Please contact @qevybtc.",
+    wrong_asset_confirmed: "The wrong coin or network was detected. Please contact @qevybtc.",
+  };
+
+  return messages[cleanStatus] || "";
+}
+
+function isAdmin(ctx) {
+  return String(ctx.from.id) === String(process.env.ADMIN_TELEGRAM_ID);
+}
+
+async function sendAdminMessage(message) {
+  if (!process.env.ADMIN_TELEGRAM_ID) {
+    return;
+  }
+
+  try {
+    await bot.telegram.sendMessage(process.env.ADMIN_TELEGRAM_ID, message, {
+      parse_mode: "HTML",
+    });
+  } catch (error) {
+    console.error("Could not send admin message:", error.message);
+  }
+}
+
+function formatTransaction(paymentId, payment, number) {
+  const title = number ? `<b>${number}. Transaction</b>` : "<b>Transaction</b>";
+
+  return [
+    title,
+    `Payment ID: <code>${escapeHtml(paymentId)}</code>`,
+    `Status: <b>${escapeHtml(payment.status || "unknown")}</b>`,
+    `Status Detail: ${escapeHtml(getStatusExplanation(payment.status))}`,
+    `Coin: ${escapeHtml((payment.coin || "unknown").toUpperCase())}`,
+    `Amount: ${escapeHtml(payment.payAmount || "unknown")}`,
+    `Address: <code>${escapeHtml(payment.payAddress || "unknown")}</code>`,
+    `User ID: <code>${escapeHtml(payment.telegramUserId || payment.chatId || "unknown")}</code>`,
+    `Username: ${escapeHtml(payment.telegramUsername || "none")}`,
+    `Name: ${escapeHtml(payment.telegramName || "unknown")}`,
+    `Created: ${escapeHtml(formatTimestamp(payment.createdAt))}`,
+    `Updated: ${escapeHtml(formatTimestamp(payment.updatedAt))}`,
+  ].join("\n");
+}
+
 function sortObject(obj) {
   return Object.keys(obj)
     .sort()
@@ -92,7 +165,7 @@ bot.command("myid", async (ctx) => {
 });
 
 bot.command("transactions", async (ctx) => {
-  if (String(ctx.from.id) !== String(process.env.ADMIN_TELEGRAM_ID)) {
+  if (!isAdmin(ctx)) {
     await ctx.reply("You are not allowed to use this command.");
     return;
   }
@@ -110,17 +183,80 @@ bot.command("transactions", async (ctx) => {
   const message = latestPayments
     .map(([paymentId, payment], index) => {
       const number = latestPayments.length - index;
+      return formatTransaction(paymentId, payment, number);
+    })
+    .join("\n\n");
 
+  await ctx.reply(message, {
+    parse_mode: "HTML",
+  });
+});
+
+bot.command("transaction", async (ctx) => {
+  if (!isAdmin(ctx)) {
+    await ctx.reply("You are not allowed to use this command.");
+    return;
+  }
+
+  const paymentId = ctx.message.text.split(" ")[1];
+
+  if (!paymentId) {
+    await ctx.reply("Use it like this: /transaction PAYMENT_ID");
+    return;
+  }
+
+  const payments = loadPayments();
+  const payment = payments[paymentId];
+
+  if (!payment) {
+    await ctx.reply("Transaction not found.");
+    return;
+  }
+
+  await ctx.reply(formatTransaction(paymentId, payment), {
+    parse_mode: "HTML",
+  });
+});
+
+bot.command("paidusers", async (ctx) => {
+  if (!isAdmin(ctx)) {
+    await ctx.reply("You are not allowed to use this command.");
+    return;
+  }
+
+  const payments = loadPayments();
+  const paidEntries = Object.entries(payments).filter(
+    ([paymentId, payment]) => payment.status === "finished"
+  );
+
+  if (paidEntries.length === 0) {
+    await ctx.reply("No paid users yet.");
+    return;
+  }
+
+  const paidUsers = new Map();
+
+  for (const [paymentId, payment] of paidEntries) {
+    const userId = payment.telegramUserId || payment.chatId || paymentId;
+
+    paidUsers.set(String(userId), {
+      paymentId,
+      payment,
+    });
+  }
+
+  const latestPaidUsers = Array.from(paidUsers.values()).slice(-20);
+
+  const message = latestPaidUsers
+    .map(({ paymentId, payment }, index) => {
       return [
-        `<b>${number}. Transaction</b>`,
-        `Payment ID: <code>${escapeHtml(paymentId)}</code>`,
-        `Status: <b>${escapeHtml(payment.status || "unknown")}</b>`,
-        `Coin: ${escapeHtml((payment.coin || "unknown").toUpperCase())}`,
-        `Amount: ${escapeHtml(payment.payAmount || "unknown")}`,
-        `Address: <code>${escapeHtml(payment.payAddress || "unknown")}</code>`,
+        `<b>${index + 1}. Paid User</b>`,
         `User ID: <code>${escapeHtml(payment.telegramUserId || payment.chatId || "unknown")}</code>`,
         `Username: ${escapeHtml(payment.telegramUsername || "none")}`,
         `Name: ${escapeHtml(payment.telegramName || "unknown")}`,
+        `Payment ID: <code>${escapeHtml(paymentId)}</code>`,
+        `Coin: ${escapeHtml((payment.coin || "unknown").toUpperCase())}`,
+        `Amount: ${escapeHtml(payment.payAmount || "unknown")}`,
         `Created: ${escapeHtml(formatTimestamp(payment.createdAt))}`,
         `Updated: ${escapeHtml(formatTimestamp(payment.updatedAt))}`,
       ].join("\n");
@@ -129,6 +265,23 @@ bot.command("transactions", async (ctx) => {
 
   await ctx.reply(message, {
     parse_mode: "HTML",
+  });
+});
+
+bot.command("export", async (ctx) => {
+  if (!isAdmin(ctx)) {
+    await ctx.reply("You are not allowed to use this command.");
+    return;
+  }
+
+  if (!fs.existsSync(DB_FILE)) {
+    await ctx.reply("No payments file exists yet.");
+    return;
+  }
+
+  await ctx.replyWithDocument({
+    source: DB_FILE,
+    filename: "payments.json",
   });
 });
 
@@ -223,7 +376,9 @@ bot.action("status", async (ctx) => {
 
   const payments = loadPayments();
   const userPayments = Object.entries(payments).filter(
-    ([paymentId, payment]) => String(payment.chatId) === String(ctx.chat.id)
+    ([paymentId, payment]) =>
+      String(payment.chatId) === String(ctx.chat.id) ||
+      String(payment.telegramUserId) === String(ctx.from.id)
   );
 
   if (userPayments.length === 0) {
@@ -248,8 +403,10 @@ bot.action("status", async (ctx) => {
       "",
       "Latest payment:",
       `Payment ID: ${escapeHtml(paymentId)}`,
-      `Coin: ${escapeHtml(payment.coin.toUpperCase())}`,
-      `Status: ${escapeHtml(payment.status)}`,
+      `Coin: ${escapeHtml((payment.coin || "unknown").toUpperCase())}`,
+      `Status: ${escapeHtml(payment.status || "unknown")}`,
+      `Status Detail: ${escapeHtml(getStatusExplanation(payment.status))}`,
+      `Amount: ${escapeHtml(payment.payAmount || "unknown")}`,
       `Created: ${escapeHtml(formatTimestamp(payment.createdAt))}`,
       `Updated: ${escapeHtml(formatTimestamp(payment.updatedAt))}`,
     ].join("\n"),
@@ -323,16 +480,34 @@ bot.action(/^coin:(btc|eth|sol)$/, async (ctx) => {
       orderId,
       coin,
       coinName: COINS[coin],
-      status: "waiting",
+      status: payment.payment_status || "waiting",
       payAddress: payment.pay_address,
       payAmount: payment.pay_amount ? `${payment.pay_amount} ${coin.toUpperCase()}` : "",
       priceAmount: process.env.PRICE_AMOUNT,
       priceCurrency: process.env.PRICE_CURRENCY,
       createdAt: new Date().toISOString(),
       updatedAt: "",
+      actuallyPaid: "",
+      outcomeAmount: "",
+      outcomeCurrency: "",
+      ipnHistory: [],
     };
 
     savePayments(payments);
+
+    await sendAdminMessage(
+      [
+        "<b>New payment attempt</b>",
+        `Payment ID: <code>${escapeHtml(payment.payment_id)}</code>`,
+        `User ID: <code>${escapeHtml(ctx.from.id)}</code>`,
+        `Username: ${escapeHtml(telegramUsername || "none")}`,
+        `Name: ${escapeHtml(telegramName || "unknown")}`,
+        `Coin: ${escapeHtml(coin.toUpperCase())}`,
+        `Amount: ${escapeHtml(payment.pay_amount ? `${payment.pay_amount} ${coin.toUpperCase()}` : "unknown")}`,
+        `Address: <code>${escapeHtml(payment.pay_address)}</code>`,
+        `Created: ${escapeHtml(formatTimestamp(new Date().toISOString()))}`,
+      ].join("\n")
+    );
 
     await ctx.reply(
       [
@@ -405,20 +580,59 @@ app.post("/nowpayments-ipn", async (req, res) => {
     return res.status(200).send("Unknown payment");
   }
 
-  payment.status = payment_status;
+  const previousStatus = payment.status || "unknown";
+  const newStatus = payment_status || previousStatus;
+
+  payment.status = newStatus;
   payment.updatedAt = new Date().toISOString();
-  payment.nowpaymentsStatus = payment_status;
-  payment.actuallyPaid = req.body.actually_paid || "";
-  payment.outcomeAmount = req.body.outcome_amount || "";
-  payment.outcomeCurrency = req.body.outcome_currency || "";
+  payment.nowpaymentsStatus = newStatus;
+  payment.actuallyPaid = req.body.actually_paid || payment.actuallyPaid || "";
+  payment.outcomeAmount = req.body.outcome_amount || payment.outcomeAmount || "";
+  payment.outcomeCurrency = req.body.outcome_currency || payment.outcomeCurrency || "";
+
+  if (!payment.ipnHistory) {
+    payment.ipnHistory = [];
+  }
+
+  payment.ipnHistory.push({
+    status: newStatus,
+    receivedAt: new Date().toISOString(),
+    actuallyPaid: req.body.actually_paid || "",
+    outcomeAmount: req.body.outcome_amount || "",
+    outcomeCurrency: req.body.outcome_currency || "",
+  });
 
   savePayments(payments);
 
-  if (payment_status === "finished") {
+  if (newStatus !== previousStatus) {
+    await sendAdminMessage(
+      [
+        "<b>Payment status update</b>",
+        `Payment ID: <code>${escapeHtml(payment_id)}</code>`,
+        `Previous: ${escapeHtml(previousStatus)}`,
+        `New: <b>${escapeHtml(newStatus)}</b>`,
+        `Detail: ${escapeHtml(getStatusExplanation(newStatus))}`,
+        `User ID: <code>${escapeHtml(payment.telegramUserId || payment.chatId || "unknown")}</code>`,
+        `Username: ${escapeHtml(payment.telegramUsername || "none")}`,
+        `Actually paid: ${escapeHtml(payment.actuallyPaid || "unknown")}`,
+        `Updated: ${escapeHtml(formatTimestamp(payment.updatedAt))}`,
+      ].join("\n")
+    );
+  }
+
+  if (newStatus === "finished" && previousStatus !== "finished") {
     await bot.telegram.sendMessage(
       payment.chatId,
       "Welcome, you now have access to Kevy The Trading Bot. Please contact @qevybtc to get started."
     );
+  }
+
+  if (newStatus !== "finished" && newStatus !== previousStatus) {
+    const userMessage = getUserStatusMessage(newStatus);
+
+    if (userMessage) {
+      await bot.telegram.sendMessage(payment.chatId, userMessage);
+    }
   }
 
   res.status(200).send("OK");

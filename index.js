@@ -283,6 +283,33 @@ bot.command("myid", async (ctx) => {
   await ctx.reply(`Your Telegram ID is: ${ctx.from.id}`);
 });
 
+bot.command("commands", async (ctx) => {
+  if (!isAdmin(ctx)) {
+    await ctx.reply("You are not allowed to use this command.");
+    return;
+  }
+
+  await ctx.reply(
+    [
+      "<b>Admin Commands</b>",
+      "",
+      "<code>/commands</code> - Shows this command list",
+      "<code>/myid</code> - Shows your Telegram user ID",
+      "<code>/stats</code> - Shows total bot stats",
+      "<code>/today</code> - Shows today's transactions",
+      "<code>/revenue</code> - Shows estimated revenue",
+      "<code>/user USER_ID</code> - Shows transactions for one user",
+      "<code>/transactions</code> - Shows the latest 10 attempted transactions",
+      "<code>/transaction PAYMENT_ID</code> - Shows one specific transaction",
+      "<code>/paidusers</code> - Shows users with successful payments",
+      "<code>/export</code> - Sends the payments.json file",
+    ].join("\n"),
+    {
+      parse_mode: "HTML",
+    }
+  );
+});
+
 bot.command("stats", async (ctx) => {
   if (!isAdmin(ctx)) {
     await ctx.reply("You are not allowed to use this command.");
@@ -796,7 +823,6 @@ bot.action("pay", async (ctx) => {
     ])
   );
 });
-
 
 bot.action(/^coin:(btc|eth|sol)$/, async (ctx) => {
   await ctx.answerCbQuery();

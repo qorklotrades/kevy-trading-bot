@@ -108,6 +108,22 @@ async function sendAdminMessage(message) {
   }
 }
 
+function getUserPayments(userId, chatId) {
+  const payments = loadPayments();
+
+  return Object.entries(payments).filter(
+    ([paymentId, payment]) =>
+      String(payment.chatId) === String(chatId) ||
+      String(payment.telegramUserId) === String(userId)
+  );
+}
+
+function userHasAccess(userId, chatId) {
+  return getUserPayments(userId, chatId).some(
+    ([paymentId, payment]) => payment.status === "finished"
+  );
+}
+
 function formatTransaction(paymentId, payment, number) {
   const title = number ? `<b>${number}. Transaction</b>` : "<b>Transaction</b>";
 
@@ -296,11 +312,121 @@ bot.start(async (ctx) => {
         Markup.button.callback("▫️ Withdraw", "withdraw"),
       ],
       [
+        Markup.button.callback("📊 Account", "account"),
+        Markup.button.callback("🎁 Referral", "referral"),
+      ],
+      [
         Markup.button.callback("👥 Help", "help"),
         Markup.button.callback("📕 Support", "support"),
       ],
+      [
+        Markup.button.callback("📌 Terms", "terms"),
+        Markup.button.callback("🔔 Updates", "updates"),
+      ],
+      [Markup.button.callback("❓ FAQ", "faq")],
       [Markup.button.callback("💠 How To Buy Crypto", "how_to_buy_crypto")],
     ])
+  );
+});
+
+bot.action("account", async (ctx) => {
+  await ctx.answerCbQuery();
+
+  const payments = getUserPayments(ctx.from.id, ctx.chat.id);
+  const latestPayment = payments.length ? payments[payments.length - 1] : null;
+  const hasAccess = userHasAccess(ctx.from.id, ctx.chat.id);
+
+  await ctx.reply(
+    [
+      "<b>📊 Account</b>",
+      "",
+      `User ID: <code>${escapeHtml(ctx.from.id)}</code>`,
+      `Username: ${escapeHtml(ctx.from.username ? `@${ctx.from.username}` : "none")}`,
+      `Access: ${hasAccess ? "Active" : "Not active"}`,
+      latestPayment ? `Latest Payment ID: <code>${escapeHtml(latestPayment[0])}</code>` : "Latest Payment ID: none",
+      latestPayment ? `Latest Status: ${escapeHtml(latestPayment[1].status || "unknown")}` : "Latest Status: none",
+      latestPayment ? `Created: ${escapeHtml(formatTimestamp(latestPayment[1].createdAt))}` : "Created: not updated yet",
+    ].join("\n"),
+    {
+      parse_mode: "HTML",
+    }
+  );
+});
+
+bot.action("referral", async (ctx) => {
+  await ctx.answerCbQuery();
+
+  const botUsername = ctx.botInfo && ctx.botInfo.username ? ctx.botInfo.username : "YOUR_BOT_USERNAME";
+  const referralLink = `https://t.me/${botUsername}?start=ref_${ctx.from.id}`;
+
+  await ctx.reply(
+    [
+      "<b>🎁 Referral</b>",
+      "",
+      "Your referral link:",
+      `<code>${escapeHtml(referralLink)}</code>`,
+    ].join("\n"),
+    {
+      parse_mode: "HTML",
+    }
+  );
+});
+
+bot.action("terms", async (ctx) => {
+  await ctx.answerCbQuery();
+
+  await ctx.reply(
+    [
+      "<b>📌 Terms</b>",
+      "",
+      "Crypto payments are final and cannot be reversed.",
+      "Always send funds using the correct coin and network.",
+      "Trading involves risk and results are not guaranteed.",
+      "If you need help, contact @qevybtc.",
+    ].join("\n"),
+    {
+      parse_mode: "HTML",
+    }
+  );
+});
+
+bot.action("updates", async (ctx) => {
+  await ctx.answerCbQuery();
+
+  await ctx.reply(
+    [
+      "<b>🔔 Updates</b>",
+      "",
+      "Updates channel: TELEGRAMUPDATESLINKHERE",
+    ].join("\n"),
+    {
+      parse_mode: "HTML",
+    }
+  );
+});
+
+bot.action("faq", async (ctx) => {
+  await ctx.answerCbQuery();
+
+  await ctx.reply(
+    [
+      "<b>❓ FAQ</b>",
+      "",
+      "<b>How do I get access?</b>",
+      "Press Get Access, choose a crypto, and send the exact amount shown.",
+      "",
+      "<b>How long does payment take?</b>",
+      "It depends on the blockchain network. Some payments can take a few minutes.",
+      "",
+      "<b>What if I send the wrong coin or network?</b>",
+      "Contact @qevybtc.",
+      "",
+      "<b>What if my payment expires?</b>",
+      "Press Get Access again to create a new payment.",
+    ].join("\n"),
+    {
+      parse_mode: "HTML",
+    }
   );
 });
 
@@ -374,12 +500,7 @@ bot.action("support", async (ctx) => {
 bot.action("status", async (ctx) => {
   await ctx.answerCbQuery();
 
-  const payments = loadPayments();
-  const userPayments = Object.entries(payments).filter(
-    ([paymentId, payment]) =>
-      String(payment.chatId) === String(ctx.chat.id) ||
-      String(payment.telegramUserId) === String(ctx.from.id)
-  );
+  const userPayments = getUserPayments(ctx.from.id, ctx.chat.id);
 
   if (userPayments.length === 0) {
     await ctx.reply(

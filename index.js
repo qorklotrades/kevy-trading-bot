@@ -12,6 +12,10 @@ const app = express();
 app.use(express.json());
 
 const DB_FILE = "payments.json";
+const PAYMENT_COOLDOWN_MS = 30 * 1000;
+const PAYMENT_REMINDER_MS = 30 * 60 * 1000;
+const REMINDER_CHECK_MS = 5 * 60 * 1000;
+const paymentCooldowns = new Map();
 
 const COINS = {
   btc: "Bitcoin",
@@ -52,6 +56,18 @@ function formatTimestamp(value) {
     timeStyle: "medium",
     timeZone: "Europe/London",
   }).format(new Date(value));
+}
+
+function londonDateKey(value) {
+  const parts = new Intl.DateTimeFormat("en-GB", {
+    timeZone: "Europe/London",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(new Date(value));
+
+  const lookup = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return `${lookup.year}-${lookup.month}-${lookup.day}`;
 }
 
 function getStatusExplanation(status) {
@@ -124,6 +140,31 @@ function userHasAccess(userId, chatId) {
   );
 }
 
+function getMainMenuKeyboard() {
+  return Markup.inlineKeyboard([
+    [Markup.button.callback("Get Access", "pay")],
+    [Markup.button.callback("My Payment Status", "status")],
+    [
+      Markup.button.callback("▪️ Deposit", "deposit"),
+      Markup.button.callback("▫️ Withdraw", "withdraw"),
+    ],
+    [
+      Markup.button.callback("📊 Account", "account"),
+      Markup.button.callback("🎁 Referral", "referral"),
+    ],
+    [
+      Markup.button.callback("👥 Help", "help"),
+      Markup.button.callback("📕 Support", "support"),
+    ],
+    [
+      Markup.button.callback("📌 Terms", "terms"),
+      Markup.button.callback("🔔 Updates", "updates"),
+    ],
+    [Markup.button.callback("❓ FAQ", "faq")],
+    [Markup.button.callback("💠 How To Buy Crypto", "how_to_buy_crypto")],
+  ]);
+}
+
 function formatTransaction(paymentId, payment, number) {
   const title = number ? `<b>${number}. Transaction</b>` : "<b>Transaction</b>";
 
@@ -141,6 +182,68 @@ function formatTransaction(paymentId, payment, number) {
     `Created: ${escapeHtml(formatTimestamp(payment.createdAt))}`,
     `Updated: ${escapeHtml(formatTimestamp(payment.updatedAt))}`,
   ].join("\n");
+}
+
+function getPaymentCooldownSeconds(userId) {
+  const cooldownUntil = paymentCooldowns.get(String(userId)) || 0;
+  const remaining = cooldownUntil - Date.now();
+
+  return remaining > 0 ? Math.ceil(remaining / 1000) : 0;
+}
+
+function startPaymentCooldown(userId) {
+  paymentCooldowns.set(String(userId), Date.now() + PAYMENT_COOLDOWN_MS);
+}
+
+function calculateRevenue(entries) {
+  return entries
+    .filter(([paymentId, payment]) => payment.status === "finished")
+    .reduce((total, [paymentId, payment]) => {
+      const amount = Number.parseFloat(payment.priceAmount || process.env.PRICE_AMOUNT || "0");
+      return total + (Number.isFinite(amount) ? amount : 0);
+    }, 0);
+}
+
+function isActiveUnpaidStatus(status) {
+  return ["waiting", "confirming", "confirmed", "sending"].includes(
+    String(status || "").toLowerCase()
+  );
+}
+
+async function sendPaymentReminderIfNeeded(paymentId) {
+  const payments = loadPayments();
+  const payment = payments[paymentId];
+
+  if (!payment || payment.reminderSentAt || !isActiveUnpaidStatus(payment.status)) {
+    return;
+  }
+
+  const createdAt = payment.createdAt ? new Date(payment.createdAt).getTime() : 0;
+
+  if (!createdAt || Date.now() - createdAt < PAYMENT_REMINDER_MS) {
+    return;
+  }
+
+  payment.reminderSentAt = new Date().toISOString();
+  savePayments(payments);
+
+  await bot.telegram.sendMessage(
+    payment.chatId,
+    "Your payment is still waiting. Complete it or create a new one by pressing Get Access.",
+    {
+      reply_markup: {
+        inline_keyboard: [[{ text: "Create New Payment", callback_data: "pay" }]],
+      },
+    }
+  );
+}
+
+async function scanPaymentReminders() {
+  const payments = loadPayments();
+
+  for (const paymentId of Object.keys(payments)) {
+    await sendPaymentReminderIfNeeded(paymentId);
+  }
 }
 
 function sortObject(obj) {
@@ -178,6 +281,150 @@ function verifyNowPaymentsSignature(body, receivedSignature) {
 
 bot.command("myid", async (ctx) => {
   await ctx.reply(`Your Telegram ID is: ${ctx.from.id}`);
+});
+
+bot.command("stats", async (ctx) => {
+  if (!isAdmin(ctx)) {
+    await ctx.reply("You are not allowed to use this command.");
+    return;
+  }
+
+  const payments = loadPayments();
+  const entries = Object.entries(payments);
+  const todayKey = londonDateKey(new Date());
+
+  const todayEntries = entries.filter(
+    ([paymentId, payment]) => payment.createdAt && londonDateKey(payment.createdAt) === todayKey
+  );
+
+  const countStatus = (status) =>
+    entries.filter(([paymentId, payment]) => payment.status === status).length;
+
+  await ctx.reply(
+    [
+      "<b>Bot Stats</b>",
+      "",
+      `Total attempts: ${entries.length}`,
+      `Today attempts: ${todayEntries.length}`,
+      `Finished: ${countStatus("finished")}`,
+      `Waiting: ${countStatus("waiting")}`,
+      `Confirming: ${countStatus("confirming")}`,
+      `Expired: ${countStatus("expired")}`,
+      `Failed: ${countStatus("failed")}`,
+      `Partially paid: ${countStatus("partially_paid")}`,
+      `Estimated revenue: ${calculateRevenue(entries).toFixed(2)} ${escapeHtml((process.env.PRICE_CURRENCY || "usd").toUpperCase())}`,
+    ].join("\n"),
+    {
+      parse_mode: "HTML",
+    }
+  );
+});
+
+bot.command("today", async (ctx) => {
+  if (!isAdmin(ctx)) {
+    await ctx.reply("You are not allowed to use this command.");
+    return;
+  }
+
+  const payments = loadPayments();
+  const entries = Object.entries(payments);
+  const todayKey = londonDateKey(new Date());
+
+  const todayEntries = entries.filter(
+    ([paymentId, payment]) => payment.createdAt && londonDateKey(payment.createdAt) === todayKey
+  );
+
+  if (todayEntries.length === 0) {
+    await ctx.reply("No transactions today.");
+    return;
+  }
+
+  const latestToday = todayEntries.slice(-10);
+
+  const message = latestToday
+    .map(([paymentId, payment], index) => {
+      const number = latestToday.length - index;
+      return formatTransaction(paymentId, payment, number);
+    })
+    .join("\n\n");
+
+  await ctx.reply(message, {
+    parse_mode: "HTML",
+  });
+});
+
+bot.command("revenue", async (ctx) => {
+  if (!isAdmin(ctx)) {
+    await ctx.reply("You are not allowed to use this command.");
+    return;
+  }
+
+  const payments = loadPayments();
+  const entries = Object.entries(payments);
+  const todayKey = londonDateKey(new Date());
+
+  const todayEntries = entries.filter(
+    ([paymentId, payment]) => payment.createdAt && londonDateKey(payment.createdAt) === todayKey
+  );
+
+  await ctx.reply(
+    [
+      "<b>Revenue</b>",
+      "",
+      `Today: ${calculateRevenue(todayEntries).toFixed(2)} ${escapeHtml((process.env.PRICE_CURRENCY || "usd").toUpperCase())}`,
+      `Total: ${calculateRevenue(entries).toFixed(2)} ${escapeHtml((process.env.PRICE_CURRENCY || "usd").toUpperCase())}`,
+      "",
+      "Revenue is estimated from finished payments using your configured price amount.",
+    ].join("\n"),
+    {
+      parse_mode: "HTML",
+    }
+  );
+});
+
+bot.command("user", async (ctx) => {
+  if (!isAdmin(ctx)) {
+    await ctx.reply("You are not allowed to use this command.");
+    return;
+  }
+
+  const query = ctx.message.text.split(" ")[1];
+
+  if (!query) {
+    await ctx.reply("Use it like this: /user USER_ID");
+    return;
+  }
+
+  const cleanQuery = query.replace("@", "").toLowerCase();
+  const payments = loadPayments();
+
+  const userEntries = Object.entries(payments).filter(([paymentId, payment]) => {
+    const username = String(payment.telegramUsername || "").replace("@", "").toLowerCase();
+
+    return (
+      String(payment.telegramUserId || "") === cleanQuery ||
+      String(payment.chatId || "") === cleanQuery ||
+      username === cleanQuery
+    );
+  });
+
+  if (userEntries.length === 0) {
+    await ctx.reply("No transactions found for this user.");
+    return;
+  }
+
+  const latestUserPayments = userEntries.slice(-10);
+
+  const message = latestUserPayments
+    .map(([paymentId, payment], index) => {
+      const number = latestUserPayments.length - index;
+      return formatTransaction(paymentId, payment, number);
+    })
+    .join("\n\n");
+
+  await ctx.reply(message, {
+    parse_mode: "HTML",
+  });
 });
 
 bot.command("transactions", async (ctx) => {
@@ -302,31 +549,21 @@ bot.command("export", async (ctx) => {
 });
 
 bot.start(async (ctx) => {
-  await ctx.reply(
-    "Welcome. Choose an option:",
-    Markup.inlineKeyboard([
-      [Markup.button.callback("Get Access", "pay")],
-      [Markup.button.callback("My Payment Status", "status")],
-      [
-        Markup.button.callback("▪️ Deposit", "deposit"),
-        Markup.button.callback("▫️ Withdraw", "withdraw"),
-      ],
-      [
-        Markup.button.callback("📊 Account", "account"),
-        Markup.button.callback("🎁 Referral", "referral"),
-      ],
-      [
-        Markup.button.callback("👥 Help", "help"),
-        Markup.button.callback("📕 Support", "support"),
-      ],
-      [
-        Markup.button.callback("📌 Terms", "terms"),
-        Markup.button.callback("🔔 Updates", "updates"),
-      ],
-      [Markup.button.callback("❓ FAQ", "faq")],
-      [Markup.button.callback("💠 How To Buy Crypto", "how_to_buy_crypto")],
-    ])
-  );
+  const menu = getMainMenuKeyboard();
+
+  if (process.env.WELCOME_IMAGE_URL) {
+    try {
+      await ctx.replyWithPhoto(process.env.WELCOME_IMAGE_URL, {
+        caption: "Welcome. Choose an option:",
+        ...menu,
+      });
+      return;
+    } catch (error) {
+      console.error("Could not send welcome image:", error.message);
+    }
+  }
+
+  await ctx.reply("Welcome. Choose an option:", menu);
 });
 
 bot.action("account", async (ctx) => {
@@ -397,7 +634,7 @@ bot.action("updates", async (ctx) => {
     [
       "<b>🔔 Updates</b>",
       "",
-      "Updates channel: https://t.me/kevybotupdates",
+      "Updates channel: TELEGRAMUPDATESLINKHERE",
     ].join("\n"),
     {
       parse_mode: "HTML",
@@ -517,6 +754,15 @@ bot.action("status", async (ctx) => {
   }
 
   const [paymentId, payment] = userPayments[userPayments.length - 1];
+  const status = String(payment.status || "").toLowerCase();
+  const extraOptions =
+    status === "expired"
+      ? {
+          reply_markup: {
+            inline_keyboard: [[{ text: "Create New Payment", callback_data: "pay" }]],
+          },
+        }
+      : {};
 
   await ctx.reply(
     [
@@ -533,6 +779,7 @@ bot.action("status", async (ctx) => {
     ].join("\n"),
     {
       parse_mode: "HTML",
+      ...extraOptions,
     }
   );
 });
@@ -558,6 +805,14 @@ bot.action(/^coin:(btc|eth|sol)$/, async (ctx) => {
   const orderId = `tg_${chatId}_${Date.now()}`;
   const telegramUsername = ctx.from.username ? `@${ctx.from.username}` : "";
   const telegramName = [ctx.from.first_name, ctx.from.last_name].filter(Boolean).join(" ");
+  const cooldownSeconds = getPaymentCooldownSeconds(ctx.from.id);
+
+  if (cooldownSeconds > 0) {
+    await ctx.reply(`Please wait ${cooldownSeconds} seconds before creating another payment.`);
+    return;
+  }
+
+  startPaymentCooldown(ctx.from.id);
 
   await ctx.reply(`Creating your ${COINS[coin]} payment...`);
 
@@ -586,6 +841,7 @@ bot.action(/^coin:(btc|eth|sol)$/, async (ctx) => {
     console.log(JSON.stringify(payment, null, 2));
 
     if (!payment.payment_id || !payment.pay_address) {
+      paymentCooldowns.delete(String(ctx.from.id));
       await ctx.reply("Payment was created, but no wallet address was returned. Check the VS Code terminal.");
       return;
     }
@@ -611,10 +867,17 @@ bot.action(/^coin:(btc|eth|sol)$/, async (ctx) => {
       actuallyPaid: "",
       outcomeAmount: "",
       outcomeCurrency: "",
+      reminderSentAt: "",
       ipnHistory: [],
     };
 
     savePayments(payments);
+
+    setTimeout(() => {
+      sendPaymentReminderIfNeeded(payment.payment_id).catch((error) => {
+        console.error("Payment reminder failed:", error.message);
+      });
+    }, PAYMENT_REMINDER_MS);
 
     await sendAdminMessage(
       [
@@ -666,6 +929,7 @@ bot.action(/^coin:(btc|eth|sol)$/, async (ctx) => {
       }
     );
   } catch (error) {
+    paymentCooldowns.delete(String(ctx.from.id));
     console.error(error.response?.data || error.message);
     await ctx.reply("Sorry, I could not create the payment. Please try again.");
   }
@@ -752,7 +1016,16 @@ app.post("/nowpayments-ipn", async (req, res) => {
     const userMessage = getUserStatusMessage(newStatus);
 
     if (userMessage) {
-      await bot.telegram.sendMessage(payment.chatId, userMessage);
+      const extraOptions =
+        newStatus === "expired"
+          ? {
+              reply_markup: {
+                inline_keyboard: [[{ text: "Create New Payment", callback_data: "pay" }]],
+              },
+            }
+          : {};
+
+      await bot.telegram.sendMessage(payment.chatId, userMessage, extraOptions);
     }
   }
 
@@ -770,5 +1043,11 @@ app.listen(port, () => {
 });
 
 bot.launch();
+
+setInterval(() => {
+  scanPaymentReminders().catch((error) => {
+    console.error("Payment reminder scan failed:", error.message);
+  });
+}, REMINDER_CHECK_MS);
 
 console.log("Telegram bot started");

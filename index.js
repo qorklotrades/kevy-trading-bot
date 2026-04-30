@@ -38,6 +38,10 @@ function escapeHtml(text) {
     .replaceAll(">", "&gt;");
 }
 
+function wait(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 function sortObject(obj) {
   return Object.keys(obj)
     .sort()
@@ -78,11 +82,37 @@ bot.start(async (ctx) => {
       [Markup.button.callback("Get Access", "pay")],
       [Markup.button.callback("My Payment Status", "status")],
       [
+        Markup.button.callback("▪️ Deposit", "deposit"),
+        Markup.button.callback("▫️ Withdraw", "withdraw"),
+      ],
+      [
         Markup.button.callback("👥 Help", "help"),
         Markup.button.callback("📕 Support", "support"),
       ],
       [Markup.button.callback("💠 How To Buy Crypto", "how_to_buy_crypto")],
     ])
+  );
+});
+
+bot.action("deposit", async (ctx) => {
+  await ctx.answerCbQuery();
+
+  await ctx.reply("Loading...");
+  await wait(1000);
+
+  await ctx.reply(
+    "You have not purchased Kevy, once you have done so by pressing Get Access, you will be able to use the following features."
+  );
+});
+
+bot.action("withdraw", async (ctx) => {
+  await ctx.answerCbQuery();
+
+  await ctx.reply("Loading...");
+  await wait(1000);
+
+  await ctx.reply(
+    "You have not purchased Kevy, once you have done so by pressing Get Access, you will be able to use the following features."
   );
 });
 

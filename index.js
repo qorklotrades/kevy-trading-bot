@@ -76,7 +76,7 @@ bot.start(async (ctx) => {
     "Welcome. Choose an option:",
     Markup.inlineKeyboard([
       [Markup.button.callback("Get Access", "pay")],
-      [Markup.button.callback("My payment status", "status")],
+      [Markup.button.callback("My Payment Status", "status")],
       [
         Markup.button.callback("👥 Help", "help"),
         Markup.button.callback("📕 Support", "support"),
@@ -93,9 +93,7 @@ bot.action("how_to_buy_crypto", async (ctx) => {
     [
       "<b>How To Buy Crypto📈</b>",
       "",
-      "<b>HOW TO BUY CRYPTO:</b>",
-      "",
-      "<b>TELEGRAMCHANNELLINKHERE</b>",
+      "<b>https://www.youtube.com/watch?v=TryloIYvi1U</b>",
     ].join("\n"),
     {
       parse_mode: "HTML",

@@ -105,7 +105,7 @@ bot.command("transactions", async (ctx) => {
     return;
   }
 
-  const latestPayments = entries.slice(-10).reverse();
+  const latestPayments = entries.slice(-10);
 
   const message = latestPayments
     .map(([paymentId, payment], index) => {

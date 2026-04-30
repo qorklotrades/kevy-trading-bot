@@ -554,7 +554,7 @@ bot.start(async (ctx) => {
   if (process.env.WELCOME_IMAGE_URL) {
     try {
       await ctx.replyWithPhoto(process.env.WELCOME_IMAGE_URL, {
-        caption: "Welcome. Choose an option:",
+        caption: "Welcome to Kevy Trading Bot.\n\nYour automated crypto trading assistant built to help you access powerful trading features with a simple one-time setup.\n\nChoose an option below to get started.",
         ...menu,
       });
       return;

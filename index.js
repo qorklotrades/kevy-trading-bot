@@ -787,7 +787,7 @@ bot.action("status", async (ctx) => {
 bot.action("pay", async (ctx) => {
   await ctx.answerCbQuery();
 
-  await ctx.editMessageText(
+  await ctx.reply(
     "Choose which crypto you want to pay with:",
     Markup.inlineKeyboard([
       [Markup.button.callback("Bitcoin", "coin:btc")],
@@ -796,6 +796,7 @@ bot.action("pay", async (ctx) => {
     ])
   );
 });
+
 
 bot.action(/^coin:(btc|eth|sol)$/, async (ctx) => {
   await ctx.answerCbQuery();

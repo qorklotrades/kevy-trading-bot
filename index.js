@@ -109,8 +109,10 @@ bot.command("transactions", async (ctx) => {
 
   const message = latestPayments
     .map(([paymentId, payment], index) => {
+      const number = latestPayments.length - index;
+
       return [
-        `<b>${index + 1}. Transaction</b>`,
+        `<b>${number}. Transaction</b>`,
         `Payment ID: <code>${escapeHtml(paymentId)}</code>`,
         `Status: <b>${escapeHtml(payment.status || "unknown")}</b>`,
         `Coin: ${escapeHtml((payment.coin || "unknown").toUpperCase())}`,

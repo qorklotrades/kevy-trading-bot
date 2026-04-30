@@ -42,6 +42,18 @@ function wait(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function formatTimestamp(value) {
+  if (!value) {
+    return "not updated yet";
+  }
+
+  return new Intl.DateTimeFormat("en-GB", {
+    dateStyle: "medium",
+    timeStyle: "medium",
+    timeZone: "Europe/London",
+  }).format(new Date(value));
+}
+
 function sortObject(obj) {
   return Object.keys(obj)
     .sort()
@@ -74,6 +86,49 @@ function verifyNowPaymentsSignature(body, receivedSignature) {
     )
   );
 }
+
+bot.command("myid", async (ctx) => {
+  await ctx.reply(`Your Telegram ID is: ${ctx.from.id}`);
+});
+
+bot.command("transactions", async (ctx) => {
+  if (String(ctx.from.id) !== String(process.env.ADMIN_TELEGRAM_ID)) {
+    await ctx.reply("You are not allowed to use this command.");
+    return;
+  }
+
+  const payments = loadPayments();
+  const entries = Object.entries(payments);
+
+  if (entries.length === 0) {
+    await ctx.reply("No attempted transactions yet.");
+    return;
+  }
+
+  const latestPayments = entries.slice(-10).reverse();
+
+  const message = latestPayments
+    .map(([paymentId, payment], index) => {
+      return [
+        `<b>${index + 1}. Transaction</b>`,
+        `Payment ID: <code>${escapeHtml(paymentId)}</code>`,
+        `Status: <b>${escapeHtml(payment.status || "unknown")}</b>`,
+        `Coin: ${escapeHtml((payment.coin || "unknown").toUpperCase())}`,
+        `Amount: ${escapeHtml(payment.payAmount || "unknown")}`,
+        `Address: <code>${escapeHtml(payment.payAddress || "unknown")}</code>`,
+        `User ID: <code>${escapeHtml(payment.telegramUserId || payment.chatId || "unknown")}</code>`,
+        `Username: ${escapeHtml(payment.telegramUsername || "none")}`,
+        `Name: ${escapeHtml(payment.telegramName || "unknown")}`,
+        `Created: ${escapeHtml(formatTimestamp(payment.createdAt))}`,
+        `Updated: ${escapeHtml(formatTimestamp(payment.updatedAt))}`,
+      ].join("\n");
+    })
+    .join("\n\n");
+
+  await ctx.reply(message, {
+    parse_mode: "HTML",
+  });
+});
 
 bot.start(async (ctx) => {
   await ctx.reply(
@@ -193,6 +248,8 @@ bot.action("status", async (ctx) => {
       `Payment ID: ${escapeHtml(paymentId)}`,
       `Coin: ${escapeHtml(payment.coin.toUpperCase())}`,
       `Status: ${escapeHtml(payment.status)}`,
+      `Created: ${escapeHtml(formatTimestamp(payment.createdAt))}`,
+      `Updated: ${escapeHtml(formatTimestamp(payment.updatedAt))}`,
     ].join("\n"),
     {
       parse_mode: "HTML",
@@ -219,6 +276,8 @@ bot.action(/^coin:(btc|eth|sol)$/, async (ctx) => {
   const coin = ctx.match[1];
   const chatId = ctx.chat.id;
   const orderId = `tg_${chatId}_${Date.now()}`;
+  const telegramUsername = ctx.from.username ? `@${ctx.from.username}` : "";
+  const telegramName = [ctx.from.first_name, ctx.from.last_name].filter(Boolean).join(" ");
 
   await ctx.reply(`Creating your ${COINS[coin]} payment...`);
 
@@ -254,10 +313,21 @@ bot.action(/^coin:(btc|eth|sol)$/, async (ctx) => {
     const payments = loadPayments();
 
     payments[payment.payment_id] = {
+      paymentId: payment.payment_id,
       chatId,
+      telegramUserId: ctx.from.id,
+      telegramUsername,
+      telegramName,
       orderId,
       coin,
+      coinName: COINS[coin],
       status: "waiting",
+      payAddress: payment.pay_address,
+      payAmount: payment.pay_amount ? `${payment.pay_amount} ${coin.toUpperCase()}` : "",
+      priceAmount: process.env.PRICE_AMOUNT,
+      priceCurrency: process.env.PRICE_CURRENCY,
+      createdAt: new Date().toISOString(),
+      updatedAt: "",
     };
 
     savePayments(payments);
@@ -334,6 +404,12 @@ app.post("/nowpayments-ipn", async (req, res) => {
   }
 
   payment.status = payment_status;
+  payment.updatedAt = new Date().toISOString();
+  payment.nowpaymentsStatus = payment_status;
+  payment.actuallyPaid = req.body.actually_paid || "";
+  payment.outcomeAmount = req.body.outcome_amount || "";
+  payment.outcomeCurrency = req.body.outcome_currency || "";
+
   savePayments(payments);
 
   if (payment_status === "finished") {

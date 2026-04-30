@@ -123,7 +123,7 @@ bot.action("support", async (ctx) => {
     [
       "<b>Support</b>",
       "",
-      "For support, contact: @qorklo",
+      "For support, contact: @qevybtc",
     ].join("\n"),
     {
       parse_mode: "HTML",
@@ -309,7 +309,7 @@ app.post("/nowpayments-ipn", async (req, res) => {
   if (payment_status === "finished") {
     await bot.telegram.sendMessage(
       payment.chatId,
-      "Welcome, you now have access to Kevy The Trading Bot. Please contact @qorklo to get started."
+      "Welcome, you now have access to Kevy The Trading Bot. Please contact @qevybtc to get started."
     );
   }
 

@@ -13,6 +13,7 @@ app.use(express.json());
 
 const DB_FILE = "payments.json";
 const STARTS_FILE = "starts.json";
+const DEPOSIT_EXPIRY_MS = 60 * 60 * 1000;
 const PAYMENT_COOLDOWN_MS = 30 * 1000;
 const PAYMENT_REMINDER_MS = 30 * 60 * 1000;
 const REMINDER_CHECK_MS = 5 * 60 * 1000;
@@ -336,6 +337,54 @@ function cancelLatestPendingDeposit(userId, chatId) {
 
   return [paymentId, payments[paymentId]];
 }
+
+function getDepositExpiresAt(payment) {
+  if (payment.depositExpiresAt) {
+    return payment.depositExpiresAt;
+  }
+
+  if (!payment.createdAt) {
+    return "";
+  }
+
+  return new Date(new Date(payment.createdAt).getTime() + DEPOSIT_EXPIRY_MS).toISOString();
+}
+
+function cancelPendingDepositsForUser(userId, chatId) {
+  const payments = loadPayments();
+  let changed = false;
+
+  for (const [paymentId, payment] of Object.entries(payments)) {
+    if (
+      paymentBelongsToUser(payment, userId, chatId) &&
+      payment.type === "deposit" &&
+      isActiveUnpaidStatus(payment.status)
+    ) {
+      payment.status = "cancelled";
+      payment.updatedAt = new Date().toISOString();
+      changed = true;
+    }
+  }
+
+  if (changed) {
+    savePayments(payments);
+  }
+}
+
+async function sendDepositCoinMenu(ctx) {
+  await ctx.reply(
+    "<b>Please select which crypto currency you would like to deposit funds into your account with.</b>",
+    {
+      parse_mode: "HTML",
+      reply_markup: mainMenuReplyMarkup([
+        [{ text: "Solana", callback_data: "deposit_coin:sol" }],
+        [{ text: "Bitcoin", callback_data: "deposit_coin:btc" }],
+        [{ text: "Ethereum", callback_data: "deposit_coin:eth" }],
+      ]),
+    }
+  );
+}
+
 
 function getUserBalanceStats(userId, chatId) {
   const userPayments = getUserPayments(userId, chatId);
@@ -1013,6 +1062,28 @@ bot.action("deposit", async (ctx) => {
     }
   );
 });
+
+bot.action("new_deposit", async (ctx) => {
+  try {
+    await ctx.answerCbQuery();
+  } catch (error) {
+    console.error("New deposit button answer error:", error.message);
+  }
+
+  try {
+    depositSessions.delete(String(ctx.from.id));
+    cancelPendingDepositsForUser(ctx.from.id, ctx.chat.id);
+
+    await sendDepositCoinMenu(ctx);
+  } catch (error) {
+    console.error("New deposit error:", error.message);
+
+    await ctx.reply("Sorry, I could not create a new deposit menu. Please press ▪️ Deposit from the main menu.", {
+      reply_markup: mainMenuReplyMarkup(),
+    });
+  }
+});
+
 
 bot.action(/^deposit_coin:(btc|eth|sol)$/, async (ctx) => {
   await ctx.answerCbQuery();

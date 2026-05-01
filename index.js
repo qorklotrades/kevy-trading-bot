@@ -1605,18 +1605,27 @@ bot.on("text", async (ctx, next) => {
       {
         parse_mode: "HTML",
         reply_markup: mainMenuReplyMarkup([
-          [
-            {
-              text: "Copy address",
-              copy_text: {
-                text: payment.pay_address,
-              },
-            },
-          ],
-          [{ text: "Check Deposit Status", callback_data: "check_deposit_status" }],
-          [{ text: "Cancel Pending Deposit", callback_data: "cancel_deposit" }],
-          [{ text: "How to buy crypto (easy)", callback_data: "how_to_buy_crypto_easy" }],
-        ]),
+  [
+    {
+      text: "Copy address",
+      copy_text: {
+        text: payment.pay_address,
+      },
+    },
+  ],
+  [
+    {
+      text: "Copy Amount",
+      copy_text: {
+        text: payment.pay_amount ? String(payment.pay_amount) : String(amount),
+      },
+    },
+  ],
+  [{ text: "Check Deposit Status", callback_data: "check_deposit_status" }],
+  [{ text: "Cancel Pending Deposit", callback_data: "cancel_deposit" }],
+  [{ text: "How to buy crypto (easy)", callback_data: "how_to_buy_crypto_easy" }],
+]),
+
       }
     );
   } catch (error) {

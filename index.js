@@ -147,8 +147,8 @@ function getStatusExplanation(status) {
     finished: "Payment successful",
     partially_paid: "Partially paid - contact support @qevybtc",
     failed: "Payment failed - contact support @qevybtc",
-    expired: "Payment expired - create a new payment",
-    cancelled: "Payment cancelled - contact support @qevybtc",
+    expired: "Payment expired - create a new deposit",
+    cancelled: "Payment cancelled",
     wrong_asset_confirmed: "Wrong coin or network detected - contact support @qevybtc",
   };
 
@@ -164,7 +164,7 @@ function getUserStatusMessage(status) {
     sending: "Payment confirmed. Finalising your access...",
     partially_paid: "Your payment was received, but it was not the full amount. Please contact @qevybtc.",
     failed: "Your payment failed. Please contact @qevybtc.",
-    expired: "Your payment has expired. Please press Get Access to create a new payment.",
+    expired: "Your payment has expired. Please press ▪️ Deposit to create a new deposit.",
     cancelled: "Your payment was cancelled. Please contact @qevybtc.",
     wrong_asset_confirmed: "The wrong coin or network was detected. Please contact @qevybtc.",
   };
@@ -190,20 +190,23 @@ async function sendAdminMessage(message) {
   }
 }
 
+function paymentBelongsToUser(payment, userId, chatId) {
+  return (
+    String(payment.chatId) === String(chatId) ||
+    String(payment.telegramUserId) === String(userId)
+  );
+}
+
 function getUserPayments(userId, chatId) {
   const payments = loadPayments();
 
-  return Object.entries(payments).filter(
-    ([paymentId, payment]) =>
-      String(payment.chatId) === String(chatId) ||
-      String(payment.telegramUserId) === String(userId)
+  return Object.entries(payments).filter(([paymentId, payment]) =>
+    paymentBelongsToUser(payment, userId, chatId)
   );
 }
 
 function userHasAccess(userId, chatId) {
-  return getUserPayments(userId, chatId).some(
-    ([paymentId, payment]) => payment.status === "finished"
-  );
+  return true;
 }
 
 function getMainMenuKeyboard() {
@@ -217,6 +220,10 @@ function getMainMenuKeyboard() {
     [
       Markup.button.callback("🎯 Snipe Bot", "snipe_bot"),
       Markup.button.callback("✨ Bot Filters", "bot_filters"),
+    ],
+    [
+      Markup.button.callback("📈 Example Trade Alert", "example_trade_alert"),
+      Markup.button.callback("⚠️ Risk Notice", "risk_notice"),
     ],
     [
       Markup.button.callback("📊 Account", "account"),
@@ -233,6 +240,15 @@ function getMainMenuKeyboard() {
     [Markup.button.callback("❓ FAQ", "faq")],
     [Markup.button.callback("💠 How To Buy Crypto", "how_to_buy_crypto")],
   ]);
+}
+
+function mainMenuReplyMarkup(extraRows = []) {
+  return {
+    inline_keyboard: [
+      ...extraRows,
+      [{ text: "⬅️ Main Menu", callback_data: "main_menu" }],
+    ],
+  };
 }
 
 function formatTransaction(paymentId, payment, number) {
@@ -280,6 +296,89 @@ function isActiveUnpaidStatus(status) {
   );
 }
 
+function getLatestDepositEntry(userId, chatId) {
+  const deposits = getUserPayments(userId, chatId).filter(
+    ([paymentId, payment]) => payment.type === "deposit"
+  );
+
+  return deposits.length ? deposits[deposits.length - 1] : null;
+}
+
+function getLatestPendingDepositEntry(userId, chatId) {
+  const deposits = getUserPayments(userId, chatId).filter(
+    ([paymentId, payment]) =>
+      payment.type === "deposit" && isActiveUnpaidStatus(payment.status)
+  );
+
+  return deposits.length ? deposits[deposits.length - 1] : null;
+}
+
+function cancelLatestPendingDeposit(userId, chatId) {
+  const payments = loadPayments();
+
+  const pendingDeposits = Object.entries(payments).filter(
+    ([paymentId, payment]) =>
+      paymentBelongsToUser(payment, userId, chatId) &&
+      payment.type === "deposit" &&
+      isActiveUnpaidStatus(payment.status)
+  );
+
+  if (pendingDeposits.length === 0) {
+    return null;
+  }
+
+  const [paymentId] = pendingDeposits[pendingDeposits.length - 1];
+
+  payments[paymentId].status = "cancelled";
+  payments[paymentId].updatedAt = new Date().toISOString();
+
+  savePayments(payments);
+
+  return [paymentId, payments[paymentId]];
+}
+
+function getUserBalanceStats(userId, chatId) {
+  const userPayments = getUserPayments(userId, chatId);
+
+  const finishedDeposits = userPayments.filter(
+    ([paymentId, payment]) => payment.type === "deposit" && payment.status === "finished"
+  );
+
+  const finishedWithdrawals = userPayments.filter(
+    ([paymentId, payment]) => payment.type === "withdrawal" && payment.status === "finished"
+  );
+
+  const sumUsd = (entries) => {
+    return entries.reduce((total, [paymentId, payment]) => {
+      const amount = Number.parseFloat(payment.priceAmount || payment.amount || "0");
+      return total + (Number.isFinite(amount) ? amount : 0);
+    }, 0);
+  };
+
+  const totalDeposited = sumUsd(finishedDeposits);
+  const totalWithdrawn = sumUsd(finishedWithdrawals);
+
+  return {
+    accountBalance: totalDeposited - totalWithdrawn,
+    totalDeposited,
+    totalWithdrawn,
+  };
+}
+
+function formatDepositStatus(paymentId, payment) {
+  return [
+    "<b>Deposit Status</b>",
+    "",
+    `Payment ID: <code>${escapeHtml(paymentId)}</code>`,
+    `Status: <b>${escapeHtml(payment.status || "unknown")}</b>`,
+    `Status Detail: ${escapeHtml(getStatusExplanation(payment.status))}`,
+    `Coin: ${escapeHtml((payment.coin || "unknown").toUpperCase())}`,
+    `Amount: ${escapeHtml(payment.payAmount || "unknown")}`,
+    `Created: ${escapeHtml(formatTimestamp(payment.createdAt))}`,
+    `Updated: ${escapeHtml(formatTimestamp(payment.updatedAt))}`,
+  ].join("\n");
+}
+
 async function sendPaymentReminderIfNeeded(paymentId) {
   const payments = loadPayments();
   const payment = payments[paymentId];
@@ -299,11 +398,12 @@ async function sendPaymentReminderIfNeeded(paymentId) {
 
   await bot.telegram.sendMessage(
     payment.chatId,
-    "Your payment is still waiting. Complete it or create a new one by pressing Get Access.",
+    "Your deposit is still waiting. Complete it, check the status, or cancel it to create a new one.",
     {
-      reply_markup: {
-        inline_keyboard: [[{ text: "Create New Payment", callback_data: "pay" }]],
-      },
+      reply_markup: mainMenuReplyMarkup([
+        [{ text: "Check Deposit Status", callback_data: "check_deposit_status" }],
+        [{ text: "Cancel Pending Deposit", callback_data: "cancel_deposit" }],
+      ]),
     }
   );
 }
@@ -376,6 +476,7 @@ bot.command("commands", async (ctx) => {
     ].join("\n"),
     {
       parse_mode: "HTML",
+      reply_markup: mainMenuReplyMarkup(),
     }
   );
 });
@@ -429,6 +530,7 @@ bot.command("stats", async (ctx) => {
       `Waiting: ${countStatus("waiting")}`,
       `Confirming: ${countStatus("confirming")}`,
       `Expired: ${countStatus("expired")}`,
+      `Cancelled: ${countStatus("cancelled")}`,
       `Failed: ${countStatus("failed")}`,
       "",
       "<b>Money</b>",
@@ -440,10 +542,10 @@ bot.command("stats", async (ctx) => {
     ].join("\n"),
     {
       parse_mode: "HTML",
+      reply_markup: mainMenuReplyMarkup(),
     }
   );
 });
-
 
 bot.command("today", async (ctx) => {
   if (!isAdmin(ctx)) {
@@ -475,6 +577,7 @@ bot.command("today", async (ctx) => {
 
   await ctx.reply(message, {
     parse_mode: "HTML",
+    reply_markup: mainMenuReplyMarkup(),
   });
 });
 
@@ -503,6 +606,7 @@ bot.command("revenue", async (ctx) => {
     ].join("\n"),
     {
       parse_mode: "HTML",
+      reply_markup: mainMenuReplyMarkup(),
     }
   );
 });
@@ -549,6 +653,7 @@ bot.command("user", async (ctx) => {
 
   await ctx.reply(message, {
     parse_mode: "HTML",
+    reply_markup: mainMenuReplyMarkup(),
   });
 });
 
@@ -577,6 +682,7 @@ bot.command("transactions", async (ctx) => {
 
   await ctx.reply(message, {
     parse_mode: "HTML",
+    reply_markup: mainMenuReplyMarkup(),
   });
 });
 
@@ -603,6 +709,7 @@ bot.command("transaction", async (ctx) => {
 
   await ctx.reply(formatTransaction(paymentId, payment), {
     parse_mode: "HTML",
+    reply_markup: mainMenuReplyMarkup(),
   });
 });
 
@@ -653,6 +760,7 @@ bot.command("paidusers", async (ctx) => {
 
   await ctx.reply(message, {
     parse_mode: "HTML",
+    reply_markup: mainMenuReplyMarkup(),
   });
 });
 
@@ -705,6 +813,11 @@ bot.start(async (ctx) => {
   await ctx.reply("Welcome. Choose an option:", menu);
 });
 
+bot.action("main_menu", async (ctx) => {
+  await ctx.answerCbQuery();
+
+  await ctx.reply("Main menu:", getMainMenuKeyboard());
+});
 
 bot.action("account", async (ctx) => {
   await ctx.answerCbQuery();
@@ -713,6 +826,7 @@ bot.action("account", async (ctx) => {
   const latestPayment = payments.length ? payments[payments.length - 1] : null;
   const hasAccess = userHasAccess(ctx.from.id, ctx.chat.id);
   const todayKey = londonDateKey(new Date());
+  const balanceStats = getUserBalanceStats(ctx.from.id, ctx.chat.id);
 
   const tradeEntries = payments.filter(
     ([paymentId, payment]) => payment.type === "trade" || payment.pnl !== undefined || payment.profit !== undefined
@@ -750,6 +864,12 @@ bot.action("account", async (ctx) => {
       latestPayment ? `Latest Status: ${escapeHtml(latestPayment[1].status || "unknown")}` : "Latest Status: none",
       latestPayment ? `Created: ${escapeHtml(formatTimestamp(latestPayment[1].createdAt))}` : "Created: not updated yet",
       "",
+      "<b>💰 Balance</b>",
+      "",
+      `Account Balance: <b>$${balanceStats.accountBalance.toFixed(2)}</b>`,
+      `Total Deposited: <b>$${balanceStats.totalDeposited.toFixed(2)}</b>`,
+      `Total Withdrawn: <b>$${balanceStats.totalWithdrawn.toFixed(2)}</b>`,
+      "",
       "<b>📈 PnL Tracker</b>",
       "",
       `Today’s PnL: <b>$${todayPnl.toFixed(2)}</b>`,
@@ -760,10 +880,10 @@ bot.action("account", async (ctx) => {
     ].join("\n"),
     {
       parse_mode: "HTML",
+      reply_markup: mainMenuReplyMarkup(),
     }
   );
 });
-
 
 bot.action("referral", async (ctx) => {
   await ctx.answerCbQuery();
@@ -780,6 +900,7 @@ bot.action("referral", async (ctx) => {
     ].join("\n"),
     {
       parse_mode: "HTML",
+      reply_markup: mainMenuReplyMarkup(),
     }
   );
 });
@@ -798,6 +919,7 @@ bot.action("terms", async (ctx) => {
     ].join("\n"),
     {
       parse_mode: "HTML",
+      reply_markup: mainMenuReplyMarkup(),
     }
   );
 });
@@ -813,6 +935,7 @@ bot.action("updates", async (ctx) => {
     ].join("\n"),
     {
       parse_mode: "HTML",
+      reply_markup: mainMenuReplyMarkup(),
     }
   );
 });
@@ -824,8 +947,14 @@ bot.action("faq", async (ctx) => {
     [
       "<b>❓ FAQ</b>",
       "",
-      "<b>How do I get access?</b>",
-      "Press Get Access, choose a crypto, and send the exact amount shown.",
+      "<b>How do I setup KevyBot?</b>",
+      "Press Setup KevyBot and follow the steps shown.",
+      "",
+      "<b>How do I deposit?</b>",
+      "Press ▪️ Deposit, choose Solana, Bitcoin, or Ethereum, then enter the amount you want to deposit.",
+      "",
+      "<b>What is the minimum deposit?</b>",
+      "The minimum deposit is $20.",
       "",
       "<b>How long does payment take?</b>",
       "It depends on the blockchain network. Some payments can take a few minutes.",
@@ -833,11 +962,12 @@ bot.action("faq", async (ctx) => {
       "<b>What if I send the wrong coin or network?</b>",
       "Contact @qevybtc.",
       "",
-      "<b>What if my payment expires?</b>",
-      "Press Get Access again to create a new payment.",
+      "<b>Can I cancel a pending deposit?</b>",
+      "Yes. Press Cancel Pending Deposit before sending funds.",
     ].join("\n"),
     {
       parse_mode: "HTML",
+      reply_markup: mainMenuReplyMarkup(),
     }
   );
 });
@@ -845,21 +975,44 @@ bot.action("faq", async (ctx) => {
 bot.action("deposit", async (ctx) => {
   await ctx.answerCbQuery();
 
+  const pendingDeposit = getLatestPendingDepositEntry(ctx.from.id, ctx.chat.id);
+
+  if (pendingDeposit) {
+    const [paymentId, payment] = pendingDeposit;
+
+    await ctx.reply(
+      [
+        "<b>You already have a pending deposit.</b>",
+        "",
+        `Payment ID: <code>${escapeHtml(paymentId)}</code>`,
+        `Status: <b>${escapeHtml(payment.status || "unknown")}</b>`,
+        `Amount: ${escapeHtml(payment.payAmount || "unknown")}`,
+        "",
+        "You can complete it, check the status, or cancel it to create a new one.",
+      ].join("\n"),
+      {
+        parse_mode: "HTML",
+        reply_markup: mainMenuReplyMarkup([
+          [{ text: "Check Deposit Status", callback_data: "check_deposit_status" }],
+          [{ text: "Cancel Pending Deposit", callback_data: "cancel_deposit" }],
+        ]),
+      }
+    );
+    return;
+  }
+
   await ctx.reply(
     "<b>Please select which crypto currency you would like to deposit funds into your account with.</b>",
     {
       parse_mode: "HTML",
-      reply_markup: {
-        inline_keyboard: [
-          [{ text: "Solana", callback_data: "deposit_coin:sol" }],
-          [{ text: "Bitcoin", callback_data: "deposit_coin:btc" }],
-          [{ text: "Ethereum", callback_data: "deposit_coin:eth" }],
-        ],
-      },
+      reply_markup: mainMenuReplyMarkup([
+        [{ text: "Solana", callback_data: "deposit_coin:sol" }],
+        [{ text: "Bitcoin", callback_data: "deposit_coin:btc" }],
+        [{ text: "Ethereum", callback_data: "deposit_coin:eth" }],
+      ]),
     }
   );
 });
-
 
 bot.action(/^deposit_coin:(btc|eth|sol)$/, async (ctx) => {
   await ctx.answerCbQuery();
@@ -880,6 +1033,9 @@ bot.action(/^deposit_coin:(btc|eth|sol)$/, async (ctx) => {
     ].join("\n"),
     {
       parse_mode: "HTML",
+      reply_markup: mainMenuReplyMarkup([
+        [{ text: "Cancel Deposit", callback_data: "cancel_deposit" }],
+      ]),
     }
   );
 });
@@ -891,12 +1047,10 @@ bot.action("withdraw", async (ctx) => {
     "<b>Please select which way you would like to withdraw your funds.</b>",
     {
       parse_mode: "HTML",
-      reply_markup: {
-        inline_keyboard: [
-          [{ text: "🏦 Bank Transfer", callback_data: "withdraw_bank" }],
-          [{ text: "🪙 Crypto Wallet", callback_data: "withdraw_crypto" }],
-        ],
-      },
+      reply_markup: mainMenuReplyMarkup([
+        [{ text: "🏦 Bank Transfer", callback_data: "withdraw_bank" }],
+        [{ text: "🪙 Crypto Wallet", callback_data: "withdraw_crypto" }],
+      ]),
     }
   );
 });
@@ -908,6 +1062,7 @@ bot.action("withdraw_bank", async (ctx) => {
     "<b>You have $0 funds to withdraw, please deposit using the menu above.</b>",
     {
       parse_mode: "HTML",
+      reply_markup: mainMenuReplyMarkup(),
     }
   );
 });
@@ -919,6 +1074,7 @@ bot.action("withdraw_crypto", async (ctx) => {
     "<b>You have $0 funds to withdraw, please deposit using the menu above.</b>",
     {
       parse_mode: "HTML",
+      reply_markup: mainMenuReplyMarkup(),
     }
   );
 });
@@ -927,7 +1083,10 @@ bot.action("snipe_bot", async (ctx) => {
   await ctx.answerCbQuery();
 
   await ctx.reply(
-    "You have deposited 0 funds into your account, please deposit using the menu above to continue."
+    "You have deposited 0 funds into your account, please deposit using the menu above to continue.",
+    {
+      reply_markup: mainMenuReplyMarkup(),
+    }
   );
 });
 
@@ -935,7 +1094,54 @@ bot.action("bot_filters", async (ctx) => {
   await ctx.answerCbQuery();
 
   await ctx.reply(
-    "You have deposited 0 funds into your account, please deposit using the menu above to continue."
+    "You have deposited 0 funds into your account, please deposit using the menu above to continue.",
+    {
+      reply_markup: mainMenuReplyMarkup(),
+    }
+  );
+});
+
+bot.action("example_trade_alert", async (ctx) => {
+  await ctx.answerCbQuery();
+
+  await ctx.reply(
+    [
+      "<b>📈 Example Trade Alert</b>",
+      "",
+      "Kevy has opened a trade.",
+      "",
+      "Coin: SOL",
+      "Entry: $145.20",
+      "Current: $151.80",
+      "Profit: +4.55%",
+      "Estimated PnL: +$22.75",
+      "",
+      "You will be alerted when Kevy makes a trade for you and explains how much profit you are in.",
+    ].join("\n"),
+    {
+      parse_mode: "HTML",
+      reply_markup: mainMenuReplyMarkup(),
+    }
+  );
+});
+
+bot.action("risk_notice", async (ctx) => {
+  await ctx.answerCbQuery();
+
+  await ctx.reply(
+    [
+      "<b>⚠️ Risk Notice</b>",
+      "",
+      "Trading involves risk and results are not guaranteed.",
+      "Only deposit funds you are comfortable using.",
+      "Crypto prices can move quickly and profits are not promised.",
+      "",
+      "If you need help, contact @qevybtc.",
+    ].join("\n"),
+    {
+      parse_mode: "HTML",
+      reply_markup: mainMenuReplyMarkup(),
+    }
   );
 });
 
@@ -950,6 +1156,7 @@ bot.action("how_to_buy_crypto", async (ctx) => {
     ].join("\n"),
     {
       parse_mode: "HTML",
+      reply_markup: mainMenuReplyMarkup(),
     }
   );
 });
@@ -965,10 +1172,10 @@ bot.action("help", async (ctx) => {
     ].join("\n"),
     {
       parse_mode: "HTML",
+      reply_markup: mainMenuReplyMarkup(),
     }
   );
 });
-
 
 bot.action("support", async (ctx) => {
   await ctx.answerCbQuery();
@@ -978,9 +1185,15 @@ bot.action("support", async (ctx) => {
       "<b>Support</b>",
       "",
       "For support, contact: @qevybtc",
+      "",
+      "Please include:",
+      "User ID",
+      "Payment ID",
+      "Issue",
     ].join("\n"),
     {
       parse_mode: "HTML",
+      reply_markup: mainMenuReplyMarkup(),
     }
   );
 });
@@ -999,6 +1212,7 @@ bot.action("status", async (ctx) => {
       ].join("\n"),
       {
         parse_mode: "HTML",
+        reply_markup: mainMenuReplyMarkup(),
       }
     );
     return;
@@ -1006,14 +1220,15 @@ bot.action("status", async (ctx) => {
 
   const [paymentId, payment] = userPayments[userPayments.length - 1];
   const status = String(payment.status || "").toLowerCase();
-  const extraOptions =
-    status === "expired"
-      ? {
-          reply_markup: {
-            inline_keyboard: [[{ text: "Create New Payment", callback_data: "pay" }]],
-          },
-        }
-      : {};
+  const buttons = [];
+
+  if (status === "expired" || status === "cancelled") {
+    buttons.push([{ text: "Create New Deposit", callback_data: "deposit" }]);
+  }
+
+  if (payment.type === "deposit" && isActiveUnpaidStatus(payment.status)) {
+    buttons.push([{ text: "Cancel Pending Deposit", callback_data: "cancel_deposit" }]);
+  }
 
   await ctx.reply(
     [
@@ -1030,7 +1245,7 @@ bot.action("status", async (ctx) => {
     ].join("\n"),
     {
       parse_mode: "HTML",
-      ...extraOptions,
+      reply_markup: mainMenuReplyMarkup(buttons),
     }
   );
 });
@@ -1054,16 +1269,17 @@ bot.action("pay", async (ctx) => {
     ].join("\n"),
     {
       parse_mode: "HTML",
+      reply_markup: mainMenuReplyMarkup(),
     }
   );
 });
 
-
-
 bot.action(/^coin:(btc|eth|sol)$/, async (ctx) => {
   await ctx.answerCbQuery();
 
-  await ctx.reply("This payment option is no longer available. Please use ▪️ Deposit instead.");
+  await ctx.reply("This payment option is no longer available. Please use ▪️ Deposit instead.", {
+    reply_markup: mainMenuReplyMarkup(),
+  });
 });
 
 bot.action("how_to_buy_crypto_easy", async (ctx) => {
@@ -1077,8 +1293,74 @@ bot.action("how_to_buy_crypto_easy", async (ctx) => {
     ].join("\n"),
     {
       parse_mode: "HTML",
+      reply_markup: mainMenuReplyMarkup(),
     }
   );
+});
+
+bot.action("cancel_deposit", async (ctx) => {
+  await ctx.answerCbQuery();
+
+  depositSessions.delete(String(ctx.from.id));
+
+  const cancelledDeposit = cancelLatestPendingDeposit(ctx.from.id, ctx.chat.id);
+
+  if (!cancelledDeposit) {
+    await ctx.reply(
+      "Deposit cancelled. You do not have any pending deposit waiting.",
+      {
+        reply_markup: mainMenuReplyMarkup(),
+      }
+    );
+    return;
+  }
+
+  const [paymentId, payment] = cancelledDeposit;
+
+  await ctx.reply(
+    [
+      "<b>Pending deposit cancelled.</b>",
+      "",
+      `Payment ID: <code>${escapeHtml(paymentId)}</code>`,
+      "",
+      "You can now create a new deposit.",
+    ].join("\n"),
+    {
+      parse_mode: "HTML",
+      reply_markup: mainMenuReplyMarkup([
+        [{ text: "Create New Deposit", callback_data: "deposit" }],
+      ]),
+    }
+  );
+});
+
+bot.action("check_deposit_status", async (ctx) => {
+  await ctx.answerCbQuery();
+
+  const latestDeposit = getLatestDepositEntry(ctx.from.id, ctx.chat.id);
+
+  if (!latestDeposit) {
+    await ctx.reply("You do not have any deposits yet.", {
+      reply_markup: mainMenuReplyMarkup(),
+    });
+    return;
+  }
+
+  const [paymentId, payment] = latestDeposit;
+  const buttons = [];
+
+  if (isActiveUnpaidStatus(payment.status)) {
+    buttons.push([{ text: "Cancel Pending Deposit", callback_data: "cancel_deposit" }]);
+  }
+
+  if (payment.status === "expired" || payment.status === "cancelled") {
+    buttons.push([{ text: "Create New Deposit", callback_data: "deposit" }]);
+  }
+
+  await ctx.reply(formatDepositStatus(paymentId, payment), {
+    parse_mode: "HTML",
+    reply_markup: mainMenuReplyMarkup(buttons),
+  });
 });
 
 bot.on("text", async (ctx, next) => {
@@ -1092,12 +1374,20 @@ bot.on("text", async (ctx, next) => {
   const amount = Number.parseFloat(amountText);
 
   if (!Number.isFinite(amount) || amount <= 0) {
-    await ctx.reply("Please enter a valid deposit amount. Example: $50");
+    await ctx.reply("Please enter a valid deposit amount. Example: $50", {
+      reply_markup: mainMenuReplyMarkup([
+        [{ text: "Cancel Deposit", callback_data: "cancel_deposit" }],
+      ]),
+    });
     return;
   }
 
   if (amount < 20) {
-    await ctx.reply("Minimum deposit amount is 20 USD. Please enter a higher amount.");
+    await ctx.reply("Minimum deposit amount is 20 USD. Please enter a higher amount.", {
+      reply_markup: mainMenuReplyMarkup([
+        [{ text: "Cancel Deposit", callback_data: "cancel_deposit" }],
+      ]),
+    });
     return;
   }
 
@@ -1184,6 +1474,12 @@ bot.on("text", async (ctx, next) => {
 
     await ctx.reply(
       [
+        "<b>Deposit Instructions</b>",
+        "",
+        `Only send ${COINS[coin]} to this address.`,
+        "Do not send from the wrong network.",
+        "Deposits under $20 will not be credited.",
+        "",
         `<b>Send ${COINS[coin]} deposit to this address:</b>`,
         "",
         `<code>${escapeHtml(payment.pay_address)}</code>`,
@@ -1197,29 +1493,26 @@ bot.on("text", async (ctx, next) => {
       ].join("\n"),
       {
         parse_mode: "HTML",
-        reply_markup: {
-          inline_keyboard: [
-            [
-              {
-                text: "Copy address",
-                copy_text: {
-                  text: payment.pay_address,
-                },
+        reply_markup: mainMenuReplyMarkup([
+          [
+            {
+              text: "Copy address",
+              copy_text: {
+                text: payment.pay_address,
               },
-            ],
-            [
-              {
-                text: "How to buy crypto (easy)",
-                callback_data: "how_to_buy_crypto_easy",
-              },
-            ],
+            },
           ],
-        },
+          [{ text: "Check Deposit Status", callback_data: "check_deposit_status" }],
+          [{ text: "Cancel Pending Deposit", callback_data: "cancel_deposit" }],
+          [{ text: "How to buy crypto (easy)", callback_data: "how_to_buy_crypto_easy" }],
+        ]),
       }
     );
   } catch (error) {
     console.error(error.response?.data || error.message);
-    await ctx.reply("Sorry, I could not create the deposit. Please try again.");
+    await ctx.reply("Sorry, I could not create the deposit. Please try again.", {
+      reply_markup: mainMenuReplyMarkup(),
+    });
   }
 });
 
@@ -1281,7 +1574,10 @@ app.post("/nowpayments-ipn", async (req, res) => {
   if (newStatus === "finished" && previousStatus !== "finished") {
     await bot.telegram.sendMessage(
       payment.chatId,
-      "Welcome, you now have access to Kevy The Trading Bot. Please contact @qevybtc to get started."
+      "Welcome, you now have access to Kevy The Trading Bot. Please contact @qevybtc to get started.",
+      {
+        reply_markup: mainMenuReplyMarkup(),
+      }
     );
   }
 
@@ -1289,16 +1585,14 @@ app.post("/nowpayments-ipn", async (req, res) => {
     const userMessage = getUserStatusMessage(newStatus);
 
     if (userMessage) {
-      const extraOptions =
+      const extraButtons =
         newStatus === "expired"
-          ? {
-              reply_markup: {
-                inline_keyboard: [[{ text: "Create New Payment", callback_data: "pay" }]],
-              },
-            }
-          : {};
+          ? [[{ text: "Create New Deposit", callback_data: "deposit" }]]
+          : [];
 
-      await bot.telegram.sendMessage(payment.chatId, userMessage, extraOptions);
+      await bot.telegram.sendMessage(payment.chatId, userMessage, {
+        reply_markup: mainMenuReplyMarkup(extraButtons),
+      });
     }
   }
 

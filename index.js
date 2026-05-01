@@ -604,6 +604,32 @@ bot.action("account", async (ctx) => {
   const payments = getUserPayments(ctx.from.id, ctx.chat.id);
   const latestPayment = payments.length ? payments[payments.length - 1] : null;
   const hasAccess = userHasAccess(ctx.from.id, ctx.chat.id);
+  const todayKey = londonDateKey(new Date());
+
+  const tradeEntries = payments.filter(
+    ([paymentId, payment]) => payment.type === "trade" || payment.pnl !== undefined || payment.profit !== undefined
+  );
+
+  const todayTradeEntries = tradeEntries.filter(
+    ([paymentId, payment]) => payment.createdAt && londonDateKey(payment.createdAt) === todayKey
+  );
+
+  const calculatePnl = (entries) => {
+    return entries.reduce((total, [paymentId, payment]) => {
+      const amount = Number.parseFloat(payment.pnl ?? payment.profit ?? "0");
+      return total + (Number.isFinite(amount) ? amount : 0);
+    }, 0);
+  };
+
+  const todayPnl = calculatePnl(todayTradeEntries);
+  const overallPnl = calculatePnl(tradeEntries);
+  const totalTrades = tradeEntries.length;
+  const winningTrades = tradeEntries.filter(([paymentId, payment]) => {
+    const amount = Number.parseFloat(payment.pnl ?? payment.profit ?? "0");
+    return Number.isFinite(amount) && amount > 0;
+  }).length;
+
+  const winRate = totalTrades > 0 ? ((winningTrades / totalTrades) * 100).toFixed(1) : "0.0";
 
   await ctx.reply(
     [
@@ -615,12 +641,21 @@ bot.action("account", async (ctx) => {
       latestPayment ? `Latest Payment ID: <code>${escapeHtml(latestPayment[0])}</code>` : "Latest Payment ID: none",
       latestPayment ? `Latest Status: ${escapeHtml(latestPayment[1].status || "unknown")}` : "Latest Status: none",
       latestPayment ? `Created: ${escapeHtml(formatTimestamp(latestPayment[1].createdAt))}` : "Created: not updated yet",
+      "",
+      "<b>📈 PnL Tracker</b>",
+      "",
+      `Today’s PnL: <b>$${todayPnl.toFixed(2)}</b>`,
+      `Overall PnL: <b>$${overallPnl.toFixed(2)}</b>`,
+      `Total Trades: <b>${totalTrades}</b>`,
+      `Winning Trades: <b>${winningTrades}</b>`,
+      `Win Rate: <b>${winRate}%</b>`,
     ].join("\n"),
     {
       parse_mode: "HTML",
     }
   );
 });
+
 
 bot.action("referral", async (ctx) => {
   await ctx.answerCbQuery();

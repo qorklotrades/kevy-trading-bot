@@ -926,23 +926,24 @@ bot.action("pay", async (ctx) => {
 
   await ctx.reply(
     [
-      "<b>How to setup KevyBot</b>",
+      "<b>📕 How to setup KevyBot</b>",
       "",
-      "<b>1️⃣ Press the ▪️Deposit button to deposit funds into your account</b>",
+      "1️⃣ Press the ▪️Deposit button to deposit funds into your account",
       "",
-      "<b>2️⃣ Pick your preset of filters in ✨ Bot Filters</b>",
+      "2️⃣ Pick your preset of filters in ✨ Bot Filters",
       "",
-      "<b>3️⃣ Let Kevy run in the backround while you enjoy your day</b>",
+      "3️⃣ Let Kevy run in the backround while you enjoy your day",
       "",
-      "<b>4️⃣ You will be alerted when Kevy makes a trade for you and explains how much profit you are in.</b>",
+      "4️⃣ You will be alerted when Kevy makes a trade for you and explains how much profit you are in.",
       "",
-      "<b>5️⃣ Withdraw using the ▫️ Withdraw button and selecting which way you would like to recieve your funds.</b>",
+      "5️⃣ Withdraw using the ▫️ Withdraw button and selecting which way you would like to recieve your funds.",
     ].join("\n"),
     {
       parse_mode: "HTML",
     }
   );
 });
+
 
 
 bot.action(/^coin:(btc|eth|sol)$/, async (ctx) => {

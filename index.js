@@ -865,8 +865,23 @@ bot.start(async (ctx) => {
 bot.action("main_menu", async (ctx) => {
   await ctx.answerCbQuery();
 
-  await ctx.reply("Main menu:", getMainMenuKeyboard());
+  const menu = getMainMenuKeyboard();
+
+  if (process.env.WELCOME_IMAGE_URL) {
+    try {
+      await ctx.replyWithPhoto(process.env.WELCOME_IMAGE_URL, {
+        caption: "Welcome to Kevy Trading Bot.\n\nYour automated crypto trading assistant built to help you access powerful trading features with a simple one-time setup.\n\nChoose an option below to get started.",
+        ...menu,
+      });
+      return;
+    } catch (error) {
+      console.error("Could not send welcome image from main menu:", error.message);
+    }
+  }
+
+  await ctx.reply("Welcome. Choose an option:", menu);
 });
+
 
 bot.action("account", async (ctx) => {
   await ctx.answerCbQuery();

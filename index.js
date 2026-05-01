@@ -911,6 +911,22 @@ bot.action(/^coin:(btc|eth|sol)$/, async (ctx) => {
     };
 
     savePayments(payments);
+    
+    await sendAdminMessage(
+  [
+    "<b>New deposit attempt</b>",
+    `Payment ID: <code>${escapeHtml(payment.payment_id)}</code>`,
+    `User ID: <code>${escapeHtml(ctx.from.id)}</code>`,
+    `Username: ${escapeHtml(telegramUsername || "none")}`,
+    `Name: ${escapeHtml(telegramName || "unknown")}`,
+    `Coin: ${escapeHtml(coin.toUpperCase())}`,
+    `Amount: ${escapeHtml(amount)} USD`,
+    `Crypto Amount: ${escapeHtml(payment.pay_amount ? `${payment.pay_amount} ${coin.toUpperCase()}` : "unknown")}`,
+    `Address: <code>${escapeHtml(payment.pay_address)}</code>`,
+    `Created: ${escapeHtml(formatTimestamp(new Date().toISOString()))}`,
+  ].join("\n")
+);
+
 
     setTimeout(() => {
       sendPaymentReminderIfNeeded(payment.payment_id).catch((error) => {

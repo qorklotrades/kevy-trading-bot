@@ -12,6 +12,7 @@ const app = express();
 app.use(express.json());
 
 const DB_FILE = "payments.json";
+const STARTS_FILE = "starts.json";
 const PAYMENT_COOLDOWN_MS = 30 * 1000;
 const PAYMENT_REMINDER_MS = 30 * 60 * 1000;
 const REMINDER_CHECK_MS = 5 * 60 * 1000;
@@ -69,6 +70,70 @@ function londonDateKey(value) {
 
   const lookup = Object.fromEntries(parts.map((part) => [part.type, part.value]));
   return `${lookup.year}-${lookup.month}-${lookup.day}`;
+}
+
+function loadStarts() {
+  if (!fs.existsSync(STARTS_FILE)) {
+    return [];
+  }
+
+  const starts = JSON.parse(fs.readFileSync(STARTS_FILE, "utf8"));
+  return Array.isArray(starts) ? starts : [];
+}
+
+function saveStarts(starts) {
+  fs.writeFileSync(STARTS_FILE, JSON.stringify(starts, null, 2));
+}
+
+function saveStartClick(ctx) {
+  const starts = loadStarts();
+  const telegramUsername = ctx.from.username ? `@${ctx.from.username}` : "";
+  const telegramName = [ctx.from.first_name, ctx.from.last_name].filter(Boolean).join(" ");
+
+  starts.push({
+    userId: ctx.from.id,
+    chatId: ctx.chat.id,
+    username: telegramUsername,
+    name: telegramName,
+    clickedAt: new Date().toISOString(),
+  });
+
+  saveStarts(starts);
+}
+
+function getStartStats() {
+  const starts = loadStarts();
+  const now = Date.now();
+  const todayKey = londonDateKey(new Date());
+  const sevenDaysAgo = now - 7 * 24 * 60 * 60 * 1000;
+  const thirtyDaysAgo = now - 30 * 24 * 60 * 60 * 1000;
+
+  const todayStarts = starts.filter(
+    (start) => start.clickedAt && londonDateKey(start.clickedAt) === todayKey
+  );
+
+  const weeklyStarts = starts.filter(
+    (start) => start.clickedAt && new Date(start.clickedAt).getTime() >= sevenDaysAgo
+  );
+
+  const monthlyStarts = starts.filter(
+    (start) => start.clickedAt && new Date(start.clickedAt).getTime() >= thirtyDaysAgo
+  );
+
+  const countUniqueUsers = (items) => {
+    return new Set(items.map((item) => String(item.userId || item.chatId))).size;
+  };
+
+  return {
+    totalStarts: starts.length,
+    todayStarts: todayStarts.length,
+    weeklyStarts: weeklyStarts.length,
+    monthlyStarts: monthlyStarts.length,
+    totalUniqueUsers: countUniqueUsers(starts),
+    todayUniqueUsers: countUniqueUsers(todayStarts),
+    weeklyUniqueUsers: countUniqueUsers(weeklyStarts),
+    monthlyUniqueUsers: countUniqueUsers(monthlyStarts),
+  };
 }
 
 function getStatusExplanation(status) {
@@ -324,8 +389,17 @@ bot.command("stats", async (ctx) => {
   const payments = loadPayments();
   const entries = Object.entries(payments);
   const todayKey = londonDateKey(new Date());
+  const startStats = getStartStats();
 
   const todayEntries = entries.filter(
+    ([paymentId, payment]) => payment.createdAt && londonDateKey(payment.createdAt) === todayKey
+  );
+
+  const depositEntries = entries.filter(
+    ([paymentId, payment]) => payment.type === "deposit"
+  );
+
+  const todayDepositEntries = depositEntries.filter(
     ([paymentId, payment]) => payment.createdAt && londonDateKey(payment.createdAt) === todayKey
   );
 
@@ -336,21 +410,40 @@ bot.command("stats", async (ctx) => {
     [
       "<b>Bot Stats</b>",
       "",
-      `Total attempts: ${entries.length}`,
-      `Today attempts: ${todayEntries.length}`,
+      "<b>/start Clicks</b>",
+      `Today: ${startStats.todayStarts}`,
+      `Last 7 Days: ${startStats.weeklyStarts}`,
+      `Last 30 Days: ${startStats.monthlyStarts}`,
+      `Total: ${startStats.totalStarts}`,
+      "",
+      "<b>Unique Users</b>",
+      `Today: ${startStats.todayUniqueUsers}`,
+      `Last 7 Days: ${startStats.weeklyUniqueUsers}`,
+      `Last 30 Days: ${startStats.monthlyUniqueUsers}`,
+      `Total: ${startStats.totalUniqueUsers}`,
+      "",
+      "<b>Deposits</b>",
+      `Total deposit attempts: ${depositEntries.length}`,
+      `Today deposit attempts: ${todayDepositEntries.length}`,
       `Finished: ${countStatus("finished")}`,
       `Waiting: ${countStatus("waiting")}`,
       `Confirming: ${countStatus("confirming")}`,
       `Expired: ${countStatus("expired")}`,
       `Failed: ${countStatus("failed")}`,
-      `Partially paid: ${countStatus("partially_paid")}`,
-      `Estimated revenue: ${calculateRevenue(entries).toFixed(2)} ${escapeHtml((process.env.PRICE_CURRENCY || "usd").toUpperCase())}`,
+      "",
+      "<b>Money</b>",
+      `Estimated completed deposits: ${calculateRevenue(depositEntries).toFixed(2)} USD`,
+      "",
+      "<b>Records</b>",
+      `Total payment records: ${entries.length}`,
+      `Today payment records: ${todayEntries.length}`,
     ].join("\n"),
     {
       parse_mode: "HTML",
     }
   );
 });
+
 
 bot.command("today", async (ctx) => {
   if (!isAdmin(ctx)) {
@@ -584,6 +677,7 @@ bot.start(async (ctx) => {
   const menu = getMainMenuKeyboard();
   const telegramUsername = ctx.from.username ? `@${ctx.from.username}` : "";
   const telegramName = [ctx.from.first_name, ctx.from.last_name].filter(Boolean).join(" ");
+  saveStartClick(ctx);
 
   await sendAdminMessage(
     [

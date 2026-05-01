@@ -888,7 +888,7 @@ bot.action("status", async (ctx) => {
 bot.action("pay", async (ctx) => {
   await ctx.answerCbQuery();
 
-  await ctx.reply("You already have free access. Use the menu below to continue.");
+  await ctx.reply("You already have free access. Use the menu above to continue.");
 });
 
 bot.action(/^coin:(btc|eth|sol)$/, async (ctx) => {

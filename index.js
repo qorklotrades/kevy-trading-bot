@@ -912,7 +912,9 @@ bot.action(/^coin:(btc|eth|sol)$/, async (ctx) => {
 
     savePayments(payments);
     
-    await sendAdminMessage(
+console.log("Sending admin deposit alert...");
+
+await sendAdminMessage(
   [
     "<b>New deposit attempt</b>",
     `Payment ID: <code>${escapeHtml(payment.payment_id)}</code>`,
@@ -926,7 +928,6 @@ bot.action(/^coin:(btc|eth|sol)$/, async (ctx) => {
     `Created: ${escapeHtml(formatTimestamp(new Date().toISOString()))}`,
   ].join("\n")
 );
-
 
     setTimeout(() => {
       sendPaymentReminderIfNeeded(payment.payment_id).catch((error) => {

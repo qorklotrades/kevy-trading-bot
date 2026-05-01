@@ -1199,62 +1199,85 @@ bot.action("support", async (ctx) => {
 });
 
 bot.action("status", async (ctx) => {
-  await ctx.answerCbQuery();
+  try {
+    await ctx.answerCbQuery();
+  } catch (error) {
+    console.error("Status button answer error:", error.message);
+  }
 
-  const pendingDeposit = getLatestPendingDepositEntry(ctx.from.id, ctx.chat.id);
+  try {
+    const pendingDeposit = getLatestPendingDepositEntry(ctx.from.id, ctx.chat.id);
 
-  if (!pendingDeposit) {
-    const latestDeposit = getLatestDepositEntry(ctx.from.id, ctx.chat.id);
-    const depositStatus = latestDeposit
-      ? latestDeposit[1].status || "unknown"
-      : "Never deposited";
+    if (!pendingDeposit) {
+      const latestDeposit = getLatestDepositEntry(ctx.from.id, ctx.chat.id);
+      const depositStatus = latestDeposit
+        ? latestDeposit[1].status || "unknown"
+        : "never deposited";
+
+      await ctx.reply(
+        [
+          "<b>My payment status</b>",
+          "",
+          "You currently don't have any pending deposits. You have either cancelled the deposit, it's expired or you have never created one.",
+          "",
+          "",
+          `Deposit status: <b>${escapeHtml(depositStatus)}</b>`,
+        ].join("\n"),
+        {
+          parse_mode: "HTML",
+          reply_markup: mainMenuReplyMarkup([
+            [{ text: "Create New Deposit", callback_data: "new_deposit" }],
+          ]),
+        }
+      );
+      return;
+    }
+
+    const [paymentId, payment] = pendingDeposit;
+    const expiresAt = getDepositExpiresAt(payment);
+    let expiresText = "not updated yet";
+
+    if (expiresAt) {
+      try {
+        expiresText = formatTimestamp(expiresAt);
+      } catch (error) {
+        expiresText = "not updated yet";
+      }
+    }
 
     await ctx.reply(
       [
         "<b>My payment status</b>",
         "",
-        "You currently don't have any pending deposits. You have either cancelled the deposit, it's expired or you have never created one.",
-        "",
-        "",
-        `Deposit status: <b>${escapeHtml(depositStatus)}</b>`,
+        "Latest pending deposit:",
+        `Payment ID: <code>${escapeHtml(paymentId)}</code>`,
+        `Coin: ${escapeHtml((payment.coin || "unknown").toUpperCase())}`,
+        `Status: ${escapeHtml(payment.status || "unknown")}`,
+        `Status Detail: ${escapeHtml(getStatusExplanation(payment.status))}`,
+        `Amount: ${escapeHtml(payment.payAmount || "unknown")}`,
+        `Address: <code>${escapeHtml(payment.payAddress || "unknown")}</code>`,
+        `Expires: ${escapeHtml(expiresText)}`,
+        `Created: ${escapeHtml(formatTimestamp(payment.createdAt))}`,
+        `Updated: ${escapeHtml(formatTimestamp(payment.updatedAt))}`,
       ].join("\n"),
       {
         parse_mode: "HTML",
         reply_markup: mainMenuReplyMarkup([
+          [{ text: "Check Deposit Status", callback_data: "check_deposit_status" }],
           [{ text: "Create New Deposit", callback_data: "new_deposit" }],
+          [{ text: "Cancel Pending Deposit", callback_data: "cancel_deposit" }],
         ]),
       }
     );
-    return;
+  } catch (error) {
+    console.error("My Payment Status error:", error.message);
+
+    await ctx.reply("Sorry, I could not load your payment status. Please try again.", {
+      reply_markup: mainMenuReplyMarkup(),
+    });
   }
-
-  const [paymentId, payment] = pendingDeposit;
-
-  await ctx.reply(
-    [
-      "<b>My payment status</b>",
-      "",
-      "Latest pending deposit:",
-      `Payment ID: ${escapeHtml(paymentId)}`,
-      `Coin: ${escapeHtml((payment.coin || "unknown").toUpperCase())}`,
-      `Status: ${escapeHtml(payment.status || "unknown")}`,
-      `Status Detail: ${escapeHtml(getStatusExplanation(payment.status))}`,
-      `Amount: ${escapeHtml(payment.payAmount || "unknown")}`,
-      payment.payAddress ? `Address: <code>${escapeHtml(payment.payAddress)}</code>` : "",
-      `Expires: ${escapeHtml(formatTimestamp(getDepositExpiresAt(payment)))}`,
-      `Created: ${escapeHtml(formatTimestamp(payment.createdAt))}`,
-      `Updated: ${escapeHtml(formatTimestamp(payment.updatedAt))}`,
-    ].filter(Boolean).join("\n"),
-    {
-      parse_mode: "HTML",
-      reply_markup: mainMenuReplyMarkup([
-        [{ text: "Check Deposit Status", callback_data: "check_deposit_status" }],
-        [{ text: "Create New Deposit", callback_data: "new_deposit" }],
-        [{ text: "Cancel Pending Deposit", callback_data: "cancel_deposit" }],
-      ]),
-    }
-  );
 });
+
 
 
 bot.action("pay", async (ctx) => {

@@ -16,6 +16,7 @@ const PAYMENT_COOLDOWN_MS = 30 * 1000;
 const PAYMENT_REMINDER_MS = 30 * 60 * 1000;
 const REMINDER_CHECK_MS = 5 * 60 * 1000;
 const paymentCooldowns = new Map();
+const depositSessions = new Map();
 
 const COINS = {
   btc: "Bitcoin",
@@ -697,13 +698,30 @@ bot.action("faq", async (ctx) => {
 bot.action("deposit", async (ctx) => {
   await ctx.answerCbQuery();
 
-  await ctx.reply("Loading...");
-  await wait(1000);
-
   await ctx.reply(
-    "You have not purchased Kevy, once you have done so by pressing Get Access, you will be able to use the following features."
+    "Choose which crypto you want to deposit with:",
+    Markup.inlineKeyboard([
+      [Markup.button.callback("Bitcoin", "deposit_coin:btc")],
+      [Markup.button.callback("Ethereum", "deposit_coin:eth")],
+      [Markup.button.callback("Solana", "deposit_coin:sol")],
+    ])
   );
 });
+
+bot.action(/^deposit_coin:(btc|eth|sol)$/, async (ctx) => {
+  await ctx.answerCbQuery();
+
+  const coin = ctx.match[1];
+
+  depositSessions.set(String(ctx.from.id), {
+    coin,
+  });
+
+  await ctx.reply(
+    `Enter the amount you want to deposit in USD using ${COINS[coin]}.\n\nExample: 25`
+  );
+});
+
 
 bot.action("withdraw", async (ctx) => {
   await ctx.answerCbQuery();
@@ -814,15 +832,9 @@ bot.action("status", async (ctx) => {
 bot.action("pay", async (ctx) => {
   await ctx.answerCbQuery();
 
-  await ctx.reply(
-    "Choose which crypto you want to pay with:",
-    Markup.inlineKeyboard([
-      [Markup.button.callback("Bitcoin", "coin:btc")],
-      [Markup.button.callback("Ethereum", "coin:eth")],
-      [Markup.button.callback("Solana", "coin:sol")],
-    ])
-  );
+  await ctx.reply("You already have free access. Use the menu below to continue.");
 });
+
 
 bot.action(/^coin:(btc|eth|sol)$/, async (ctx) => {
   await ctx.answerCbQuery();
@@ -975,6 +987,130 @@ bot.action("how_to_buy_crypto_easy", async (ctx) => {
       parse_mode: "HTML",
     }
   );
+});
+
+bot.on("text", async (ctx, next) => {
+  const session = depositSessions.get(String(ctx.from.id));
+
+  if (!session) {
+    return next();
+  }
+
+  const amount = Number.parseFloat(ctx.message.text);
+
+  if (!Number.isFinite(amount) || amount <= 0) {
+    await ctx.reply("Please enter a valid deposit amount. Example: 25");
+    return;
+  }
+
+  if (amount < 5) {
+    await ctx.reply("Minimum deposit amount is 5 USD. Please enter a higher amount.");
+    return;
+  }
+
+  depositSessions.delete(String(ctx.from.id));
+
+  const coin = session.coin;
+  const chatId = ctx.chat.id;
+  const orderId = `deposit_${chatId}_${Date.now()}`;
+  const telegramUsername = ctx.from.username ? `@${ctx.from.username}` : "";
+  const telegramName = [ctx.from.first_name, ctx.from.last_name].filter(Boolean).join(" ");
+
+  await ctx.reply(`Creating your ${COINS[coin]} deposit...`);
+
+  try {
+    const response = await axios.post(
+      `${process.env.NOWPAYMENTS_BASE_URL}/payment`,
+      {
+        price_amount: amount,
+        price_currency: "usd",
+        pay_currency: coin,
+        ipn_callback_url: `${process.env.PUBLIC_BASE_URL}/nowpayments-ipn`,
+        order_id: orderId,
+        order_description: `Telegram deposit from user ${chatId}`,
+      },
+      {
+        headers: {
+          "x-api-key": process.env.NOWPAYMENTS_API_KEY,
+          "Content-Type": "application/json",
+        },
+      }
+    );
+
+    const payment = response.data;
+
+    if (!payment.payment_id || !payment.pay_address) {
+      await ctx.reply("Deposit was created, but no wallet address was returned. Check the VS Code terminal.");
+      return;
+    }
+
+    const payments = loadPayments();
+
+    payments[payment.payment_id] = {
+      paymentId: payment.payment_id,
+      chatId,
+      telegramUserId: ctx.from.id,
+      telegramUsername,
+      telegramName,
+      orderId,
+      coin,
+      coinName: COINS[coin],
+      status: payment.payment_status || "waiting",
+      payAddress: payment.pay_address,
+      payAmount: payment.pay_amount ? `${payment.pay_amount} ${coin.toUpperCase()}` : "",
+      priceAmount: amount,
+      priceCurrency: "usd",
+      createdAt: new Date().toISOString(),
+      updatedAt: "",
+      actuallyPaid: "",
+      outcomeAmount: "",
+      outcomeCurrency: "",
+      reminderSentAt: "",
+      ipnHistory: [],
+      type: "deposit",
+    };
+
+    savePayments(payments);
+
+    await ctx.reply(
+      [
+        `<b>Send ${COINS[coin]} deposit to this address:</b>`,
+        "",
+        `<code>${escapeHtml(payment.pay_address)}</code>`,
+        "",
+        payment.pay_amount
+          ? `<b>Amount:</b> <code>${payment.pay_amount} ${coin.toUpperCase()}</code>`
+          : `<b>Amount:</b> ${amount} USD worth of ${coin.toUpperCase()}`,
+        "",
+        "Use the correct network only.",
+        `<b>Payment ID:</b> <code>${escapeHtml(payment.payment_id)}</code>`,
+      ].join("\n"),
+      {
+        parse_mode: "HTML",
+        reply_markup: {
+          inline_keyboard: [
+            [
+              {
+                text: "Copy address",
+                copy_text: {
+                  text: payment.pay_address,
+                },
+              },
+            ],
+            [
+              {
+                text: "How to buy crypto (easy)",
+                callback_data: "how_to_buy_crypto_easy",
+              },
+            ],
+          ],
+        },
+      }
+    );
+  } catch (error) {
+    console.error(error.response?.data || error.message);
+    await ctx.reply("Sorry, I could not create the deposit. Please try again.");
+  }
 });
 
 app.post("/nowpayments-ipn", async (req, res) => {

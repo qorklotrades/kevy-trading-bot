@@ -926,6 +926,8 @@ bot.action("pay", async (ctx) => {
 
   await ctx.reply(
     [
+      "<b>How to setup KevyBot</b>",
+      "",
       "<b>1️⃣ Press the ▪️Deposit button to deposit funds into your account</b>",
       "",
       "<b>2️⃣ Pick your preset of filters in ✨ Bot Filters</b>",
@@ -941,6 +943,7 @@ bot.action("pay", async (ctx) => {
     }
   );
 });
+
 
 bot.action(/^coin:(btc|eth|sol)$/, async (ctx) => {
   await ctx.answerCbQuery();

@@ -1104,19 +1104,29 @@ bot.action("bot_filters", async (ctx) => {
 bot.action("example_trade_alert", async (ctx) => {
   await ctx.answerCbQuery();
 
+  const coins = ["SOL", "BTC", "ETH", "DOGE", "PEPE", "BONK", "WIF"];
+  const coin = coins[Math.floor(Math.random() * coins.length)];
+
+  const entry = Number((Math.random() * 200 + 0.01).toFixed(4));
+  const profitPercent = Number((Math.random() * 18 + 2).toFixed(2));
+  const current = Number((entry * (1 + profitPercent / 100)).toFixed(4));
+  const estimatedPnl = Number((Math.random() * 120 + 5).toFixed(2));
+
   await ctx.reply(
     [
       "<b>📈 Example Trade Alert</b>",
       "",
       "Kevy has opened a trade.",
       "",
-      "Coin: SOL",
-      "Entry: $145.20",
-      "Current: $151.80",
-      "Profit: +4.55%",
-      "Estimated PnL: +$22.75",
+      `<b>Coin:</b> ${coin}`,
+      `<b>Entry:</b> $${entry}`,
+      `<b>Current:</b> $${current}`,
+      `<b>Profit:</b> +${profitPercent}%`,
+      `<b>Estimated PnL:</b> +$${estimatedPnl}`,
       "",
       "You will be alerted when Kevy makes a trade for you and explains how much profit you are in.",
+      "",
+      "<i>This is a simulation of what Kevy will send you when it enters a trade or when you request information off him. He will talk back to you like a human being and tell you want you want to know about the trade and his thoughts on it.</i>",
     ].join("\n"),
     {
       parse_mode: "HTML",

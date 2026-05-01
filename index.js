@@ -723,23 +723,54 @@ bot.action(/^deposit_coin:(btc|eth|sol)$/, async (ctx) => {
 
   await ctx.reply(
     [
-      `Please enter the amount you would like to deposit in USD using ${COINS[coin]}`,
+      `<b>Please enter the amount you would like to deposit in USD using ${COINS[coin]}</b>`,
       "",
       "The minimum amount to deposit is $20, anything under that will be voided and you will not recieve it in your wallet.",
       "",
-      "Example: $50",
-    ].join("\n")
+      "<b>Example: $50</b>",
+    ].join("\n"),
+    {
+      parse_mode: "HTML",
+    }
   );
 });
 
 bot.action("withdraw", async (ctx) => {
   await ctx.answerCbQuery();
 
-  await ctx.reply("Loading...");
-  await wait(1000);
+  await ctx.reply(
+    "<b>Please select which way you would like to withdraw your funds.</b>",
+    {
+      parse_mode: "HTML",
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: "🏦 Bank Transfer", callback_data: "withdraw_bank" }],
+          [{ text: "🪙 Crypto Wallet", callback_data: "withdraw_crypto" }],
+        ],
+      },
+    }
+  );
+});
+
+bot.action("withdraw_bank", async (ctx) => {
+  await ctx.answerCbQuery();
 
   await ctx.reply(
-    "You have not purchased Kevy, once you have done so by pressing Get Access, you will be able to use the following features."
+    "<b>You have $0 funds to withdraw, please deposit using the menu above.</b>",
+    {
+      parse_mode: "HTML",
+    }
+  );
+});
+
+bot.action("withdraw_crypto", async (ctx) => {
+  await ctx.answerCbQuery();
+
+  await ctx.reply(
+    "<b>You have $0 funds to withdraw, please deposit using the menu above.</b>",
+    {
+      parse_mode: "HTML",
+    }
   );
 });
 

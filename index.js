@@ -143,7 +143,7 @@ function userHasAccess(userId, chatId) {
 
 function getMainMenuKeyboard() {
   return Markup.inlineKeyboard([
-    [Markup.button.callback("Get Access", "pay")],
+    [Markup.button.callback("Setup KevyBot", "pay")],
     [Markup.button.callback("My Payment Status", "status")],
     [
       Markup.button.callback("▪️ Deposit", "deposit"),
@@ -847,13 +847,14 @@ bot.action("help", async (ctx) => {
     [
       "<b>Help</b>",
       "",
-      "To use this profitable trading bot, press Get Access, choose Bitcoin, Ethereum, or Solana, then send the exact amount to the address shown.",
+      "Kevy Trading Bot is built to help you deposit funds, track your account, access trading tools like Snipe Bot and Bot Filters, check your payment status, and get support whenever needed.",
     ].join("\n"),
     {
       parse_mode: "HTML",
     }
   );
 });
+
 
 bot.action("support", async (ctx) => {
   await ctx.answerCbQuery();
@@ -923,7 +924,22 @@ bot.action("status", async (ctx) => {
 bot.action("pay", async (ctx) => {
   await ctx.answerCbQuery();
 
-  await ctx.reply("You already have free access. Use the menu above to continue.");
+  await ctx.reply(
+    [
+      "<b>1️⃣ Press the ▪️Deposit button to deposit funds into your account</b>",
+      "",
+      "<b>2️⃣ Pick your preset of filters in ✨ Bot Filters</b>",
+      "",
+      "<b>3️⃣ Let Kevy run in the backround while you enjoy your day</b>",
+      "",
+      "<b>4️⃣ You will be alerted when Kevy makes a trade for you and explains how much profit you are in.</b>",
+      "",
+      "<b>5️⃣ Withdraw using the ▫️ Withdraw button and selecting which way you would like to recieve your funds.</b>",
+    ].join("\n"),
+    {
+      parse_mode: "HTML",
+    }
+  );
 });
 
 bot.action(/^coin:(btc|eth|sol)$/, async (ctx) => {

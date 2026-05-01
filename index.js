@@ -582,6 +582,19 @@ bot.command("export", async (ctx) => {
 
 bot.start(async (ctx) => {
   const menu = getMainMenuKeyboard();
+  const telegramUsername = ctx.from.username ? `@${ctx.from.username}` : "";
+  const telegramName = [ctx.from.first_name, ctx.from.last_name].filter(Boolean).join(" ");
+
+  await sendAdminMessage(
+    [
+      "<b>New /start click</b>",
+      `User ID: <code>${escapeHtml(ctx.from.id)}</code>`,
+      `Chat ID: <code>${escapeHtml(ctx.chat.id)}</code>`,
+      `Username: ${escapeHtml(telegramUsername || "none")}`,
+      `Name: ${escapeHtml(telegramName || "unknown")}`,
+      `Started: ${escapeHtml(formatTimestamp(new Date().toISOString()))}`,
+    ].join("\n")
+  );
 
   if (process.env.WELCOME_IMAGE_URL) {
     try {
@@ -597,6 +610,7 @@ bot.start(async (ctx) => {
 
   await ctx.reply("Welcome. Choose an option:", menu);
 });
+
 
 bot.action("account", async (ctx) => {
   await ctx.answerCbQuery();
@@ -738,14 +752,20 @@ bot.action("deposit", async (ctx) => {
   await ctx.answerCbQuery();
 
   await ctx.reply(
-    "Choose which crypto you want to deposit with:",
-    Markup.inlineKeyboard([
-      [Markup.button.callback("Bitcoin", "deposit_coin:btc")],
-      [Markup.button.callback("Ethereum", "deposit_coin:eth")],
-      [Markup.button.callback("Solana", "deposit_coin:sol")],
-    ])
+    "<b>Please select which crypto currency you would like to deposit funds into your account with.</b>",
+    {
+      parse_mode: "HTML",
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: "Solana", callback_data: "deposit_coin:sol" }],
+          [{ text: "Bitcoin", callback_data: "deposit_coin:btc" }],
+          [{ text: "Ethereum", callback_data: "deposit_coin:eth" }],
+        ],
+      },
+    }
   );
 });
+
 
 bot.action(/^deposit_coin:(btc|eth|sol)$/, async (ctx) => {
   await ctx.answerCbQuery();

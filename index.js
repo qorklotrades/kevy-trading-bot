@@ -13,6 +13,7 @@ app.use(express.json());
 
 const DB_FILE = "payments.json";
 const STARTS_FILE = "starts.json";
+const DEPOSIT_EXPIRY_MS = 60 * 60 * 1000;
 const PAYMENT_COOLDOWN_MS = 30 * 1000;
 const PAYMENT_REMINDER_MS = 30 * 60 * 1000;
 const REMINDER_CHECK_MS = 5 * 60 * 1000;
@@ -296,7 +297,73 @@ function isActiveUnpaidStatus(status) {
   );
 }
 
+function getDepositExpiresAt(payment) {
+  if (payment.depositExpiresAt) {
+    return payment.depositExpiresAt;
+  }
+
+  if (!payment.createdAt) {
+    return "";
+  }
+
+  return new Date(new Date(payment.createdAt).getTime() + DEPOSIT_EXPIRY_MS).toISOString();
+}
+
+function isDepositExpired(payment) {
+  const expiresAt = getDepositExpiresAt(payment);
+
+  if (!expiresAt || !isActiveUnpaidStatus(payment.status)) {
+    return false;
+  }
+
+  return Date.now() >= new Date(expiresAt).getTime();
+}
+
+function expireOldPendingDeposits(userId, chatId) {
+  const payments = loadPayments();
+  let changed = false;
+
+  for (const [paymentId, payment] of Object.entries(payments)) {
+    if (
+      paymentBelongsToUser(payment, userId, chatId) &&
+      payment.type === "deposit" &&
+      isDepositExpired(payment)
+    ) {
+      payment.status = "expired";
+      payment.updatedAt = new Date().toISOString();
+      changed = true;
+    }
+  }
+
+  if (changed) {
+    savePayments(payments);
+  }
+}
+
+function cancelPendingDepositsForUser(userId, chatId) {
+  const payments = loadPayments();
+  let changed = false;
+
+  for (const [paymentId, payment] of Object.entries(payments)) {
+    if (
+      paymentBelongsToUser(payment, userId, chatId) &&
+      payment.type === "deposit" &&
+      isActiveUnpaidStatus(payment.status)
+    ) {
+      payment.status = "cancelled";
+      payment.updatedAt = new Date().toISOString();
+      changed = true;
+    }
+  }
+
+  if (changed) {
+    savePayments(payments);
+  }
+}
+
 function getLatestDepositEntry(userId, chatId) {
+  expireOldPendingDeposits(userId, chatId);
+
   const deposits = getUserPayments(userId, chatId).filter(
     ([paymentId, payment]) => payment.type === "deposit"
   );
@@ -305,6 +372,8 @@ function getLatestDepositEntry(userId, chatId) {
 }
 
 function getLatestPendingDepositEntry(userId, chatId) {
+  expireOldPendingDeposits(userId, chatId);
+
   const deposits = getUserPayments(userId, chatId).filter(
     ([paymentId, payment]) =>
       payment.type === "deposit" && isActiveUnpaidStatus(payment.status)
@@ -374,9 +443,25 @@ function formatDepositStatus(paymentId, payment) {
     `Status Detail: ${escapeHtml(getStatusExplanation(payment.status))}`,
     `Coin: ${escapeHtml((payment.coin || "unknown").toUpperCase())}`,
     `Amount: ${escapeHtml(payment.payAmount || "unknown")}`,
+    `Address: <code>${escapeHtml(payment.payAddress || "unknown")}</code>`,
+    `Expires: ${escapeHtml(formatTimestamp(getDepositExpiresAt(payment)))}`,
     `Created: ${escapeHtml(formatTimestamp(payment.createdAt))}`,
     `Updated: ${escapeHtml(formatTimestamp(payment.updatedAt))}`,
   ].join("\n");
+}
+
+async function sendDepositCoinMenu(ctx) {
+  await ctx.reply(
+    "<b>Please select which crypto currency you would like to deposit funds into your account with.</b>",
+    {
+      parse_mode: "HTML",
+      reply_markup: mainMenuReplyMarkup([
+        [{ text: "Solana", callback_data: "deposit_coin:sol" }],
+        [{ text: "Bitcoin", callback_data: "deposit_coin:btc" }],
+        [{ text: "Ethereum", callback_data: "deposit_coin:eth" }],
+      ]),
+    }
+  );
 }
 
 async function sendPaymentReminderIfNeeded(paymentId) {
@@ -402,6 +487,7 @@ async function sendPaymentReminderIfNeeded(paymentId) {
     {
       reply_markup: mainMenuReplyMarkup([
         [{ text: "Check Deposit Status", callback_data: "check_deposit_status" }],
+        [{ text: "Create New Deposit", callback_data: "new_deposit" }],
         [{ text: "Cancel Pending Deposit", callback_data: "cancel_deposit" }],
       ]),
     }
@@ -957,7 +1043,10 @@ bot.action("faq", async (ctx) => {
       "The minimum deposit is $20.",
       "",
       "<b>How long does payment take?</b>",
-      "It depends on the blockchain network. Some payments can take a few minutes.",
+      "Your deposit will expire in 60 minutes.",
+      "",
+      "<b>What if I already have a pending deposit?</b>",
+      "The bot will show you the current address. You can complete it, check the status, or create a new deposit.",
       "",
       "<b>What if I send the wrong coin or network?</b>",
       "Contact @qevybtc.",
@@ -987,6 +1076,8 @@ bot.action("deposit", async (ctx) => {
         `Payment ID: <code>${escapeHtml(paymentId)}</code>`,
         `Status: <b>${escapeHtml(payment.status || "unknown")}</b>`,
         `Amount: ${escapeHtml(payment.payAmount || "unknown")}`,
+        `Address: <code>${escapeHtml(payment.payAddress || "unknown")}</code>`,
+        `Expires: ${escapeHtml(formatTimestamp(getDepositExpiresAt(payment)))}`,
         "",
         "You can complete it, check the status, or cancel it to create a new one.",
       ].join("\n"),
@@ -994,6 +1085,7 @@ bot.action("deposit", async (ctx) => {
         parse_mode: "HTML",
         reply_markup: mainMenuReplyMarkup([
           [{ text: "Check Deposit Status", callback_data: "check_deposit_status" }],
+          [{ text: "Create New Deposit", callback_data: "new_deposit" }],
           [{ text: "Cancel Pending Deposit", callback_data: "cancel_deposit" }],
         ]),
       }
@@ -1001,17 +1093,16 @@ bot.action("deposit", async (ctx) => {
     return;
   }
 
-  await ctx.reply(
-    "<b>Please select which crypto currency you would like to deposit funds into your account with.</b>",
-    {
-      parse_mode: "HTML",
-      reply_markup: mainMenuReplyMarkup([
-        [{ text: "Solana", callback_data: "deposit_coin:sol" }],
-        [{ text: "Bitcoin", callback_data: "deposit_coin:btc" }],
-        [{ text: "Ethereum", callback_data: "deposit_coin:eth" }],
-      ]),
-    }
-  );
+  await sendDepositCoinMenu(ctx);
+});
+
+bot.action("new_deposit", async (ctx) => {
+  await ctx.answerCbQuery();
+
+  depositSessions.delete(String(ctx.from.id));
+  cancelPendingDepositsForUser(ctx.from.id, ctx.chat.id);
+
+  await sendDepositCoinMenu(ctx);
 });
 
 bot.action(/^deposit_coin:(btc|eth|sol)$/, async (ctx) => {
@@ -1026,6 +1117,8 @@ bot.action(/^deposit_coin:(btc|eth|sol)$/, async (ctx) => {
   await ctx.reply(
     [
       `<b>Please enter the amount you would like to deposit in USD using ${COINS[coin]}</b>`,
+      "",
+      "Your deposit will expire in 60 minutes.",
       "",
       "The minimum amount to deposit is $20, anything under that will be voided and you will not recieve it in your wallet.",
       "",
@@ -1223,10 +1316,12 @@ bot.action("status", async (ctx) => {
   const buttons = [];
 
   if (status === "expired" || status === "cancelled") {
-    buttons.push([{ text: "Create New Deposit", callback_data: "deposit" }]);
+    buttons.push([{ text: "Create New Deposit", callback_data: "new_deposit" }]);
   }
 
   if (payment.type === "deposit" && isActiveUnpaidStatus(payment.status)) {
+    buttons.push([{ text: "Check Deposit Status", callback_data: "check_deposit_status" }]);
+    buttons.push([{ text: "Create New Deposit", callback_data: "new_deposit" }]);
     buttons.push([{ text: "Cancel Pending Deposit", callback_data: "cancel_deposit" }]);
   }
 
@@ -1240,9 +1335,11 @@ bot.action("status", async (ctx) => {
       `Status: ${escapeHtml(payment.status || "unknown")}`,
       `Status Detail: ${escapeHtml(getStatusExplanation(payment.status))}`,
       `Amount: ${escapeHtml(payment.payAmount || "unknown")}`,
+      payment.payAddress ? `Address: <code>${escapeHtml(payment.payAddress)}</code>` : "",
+      payment.type === "deposit" ? `Expires: ${escapeHtml(formatTimestamp(getDepositExpiresAt(payment)))}` : "",
       `Created: ${escapeHtml(formatTimestamp(payment.createdAt))}`,
       `Updated: ${escapeHtml(formatTimestamp(payment.updatedAt))}`,
-    ].join("\n"),
+    ].filter(Boolean).join("\n"),
     {
       parse_mode: "HTML",
       reply_markup: mainMenuReplyMarkup(buttons),
@@ -1315,7 +1412,7 @@ bot.action("cancel_deposit", async (ctx) => {
     return;
   }
 
-  const [paymentId, payment] = cancelledDeposit;
+  const [paymentId] = cancelledDeposit;
 
   await ctx.reply(
     [
@@ -1328,7 +1425,7 @@ bot.action("cancel_deposit", async (ctx) => {
     {
       parse_mode: "HTML",
       reply_markup: mainMenuReplyMarkup([
-        [{ text: "Create New Deposit", callback_data: "deposit" }],
+        [{ text: "Create New Deposit", callback_data: "new_deposit" }],
       ]),
     }
   );
@@ -1350,11 +1447,12 @@ bot.action("check_deposit_status", async (ctx) => {
   const buttons = [];
 
   if (isActiveUnpaidStatus(payment.status)) {
+    buttons.push([{ text: "Create New Deposit", callback_data: "new_deposit" }]);
     buttons.push([{ text: "Cancel Pending Deposit", callback_data: "cancel_deposit" }]);
   }
 
   if (payment.status === "expired" || payment.status === "cancelled") {
-    buttons.push([{ text: "Create New Deposit", callback_data: "deposit" }]);
+    buttons.push([{ text: "Create New Deposit", callback_data: "new_deposit" }]);
   }
 
   await ctx.reply(formatDepositStatus(paymentId, payment), {
@@ -1392,12 +1490,14 @@ bot.on("text", async (ctx, next) => {
   }
 
   depositSessions.delete(String(ctx.from.id));
+  cancelPendingDepositsForUser(ctx.from.id, ctx.chat.id);
 
   const coin = session.coin;
   const chatId = ctx.chat.id;
   const orderId = `deposit_${chatId}_${Date.now()}`;
   const telegramUsername = ctx.from.username ? `@${ctx.from.username}` : "";
   const telegramName = [ctx.from.first_name, ctx.from.last_name].filter(Boolean).join(" ");
+  const depositExpiresAt = new Date(Date.now() + DEPOSIT_EXPIRY_MS).toISOString();
 
   await ctx.reply(`Creating your ${COINS[coin]} deposit...`);
 
@@ -1444,6 +1544,7 @@ bot.on("text", async (ctx, next) => {
       priceAmount: amount,
       priceCurrency: "usd",
       createdAt: new Date().toISOString(),
+      depositExpiresAt,
       updatedAt: "",
       actuallyPaid: "",
       outcomeAmount: "",
@@ -1468,6 +1569,7 @@ bot.on("text", async (ctx, next) => {
         `Amount: ${escapeHtml(amount)} USD`,
         `Crypto Amount: ${escapeHtml(payment.pay_amount ? `${payment.pay_amount} ${coin.toUpperCase()}` : "unknown")}`,
         `Address: <code>${escapeHtml(payment.pay_address)}</code>`,
+        `Expires: ${escapeHtml(formatTimestamp(depositExpiresAt))}`,
         `Created: ${escapeHtml(formatTimestamp(new Date().toISOString()))}`,
       ].join("\n")
     );
@@ -1475,6 +1577,8 @@ bot.on("text", async (ctx, next) => {
     await ctx.reply(
       [
         "<b>Deposit Instructions</b>",
+        "",
+        "Your deposit will expire in 60 minutes.",
         "",
         `Only send ${COINS[coin]} to this address.`,
         "Do not send from the wrong network.",
@@ -1490,6 +1594,7 @@ bot.on("text", async (ctx, next) => {
         "",
         "Use the correct network only.",
         `<b>Payment ID:</b> <code>${escapeHtml(payment.payment_id)}</code>`,
+        `Expires: ${escapeHtml(formatTimestamp(depositExpiresAt))}`,
       ].join("\n"),
       {
         parse_mode: "HTML",
@@ -1503,6 +1608,7 @@ bot.on("text", async (ctx, next) => {
             },
           ],
           [{ text: "Check Deposit Status", callback_data: "check_deposit_status" }],
+          [{ text: "Create New Deposit", callback_data: "new_deposit" }],
           [{ text: "Cancel Pending Deposit", callback_data: "cancel_deposit" }],
           [{ text: "How to buy crypto (easy)", callback_data: "how_to_buy_crypto_easy" }],
         ]),
@@ -1587,7 +1693,7 @@ app.post("/nowpayments-ipn", async (req, res) => {
     if (userMessage) {
       const extraButtons =
         newStatus === "expired"
-          ? [[{ text: "Create New Deposit", callback_data: "deposit" }]]
+          ? [[{ text: "Create New Deposit", callback_data: "new_deposit" }]]
           : [];
 
       await bot.telegram.sendMessage(payment.chatId, userMessage, {

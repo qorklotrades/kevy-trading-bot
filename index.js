@@ -1706,7 +1706,8 @@ app.post("/nowpayments-ipn", async (req, res) => {
     );
   }
 
-  if (newStatus === "finished" && previousStatus !== "finished") {
+if (newStatus === "finished" && previousStatus !== "finished") {
+  try {
     await bot.telegram.sendMessage(
       payment.chatId,
       "Welcome, you now have access to Kevy The Trading Bot. Please contact @qevybtc to get started.",
@@ -1714,7 +1715,26 @@ app.post("/nowpayments-ipn", async (req, res) => {
         reply_markup: mainMenuReplyMarkup(),
       }
     );
+  } catch (error) {
+    console.error("Could not send user payment completion message:", error.message);
   }
+
+  await sendAdminMessage(
+    [
+      "<b>✅ Payment completed</b>",
+      "",
+      `Payment ID: <code>${escapeHtml(payment_id)}</code>`,
+      `User ID: <code>${escapeHtml(payment.telegramUserId || payment.chatId || "unknown")}</code>`,
+      `Username: ${escapeHtml(payment.telegramUsername || "none")}`,
+      `Name: ${escapeHtml(payment.telegramName || "unknown")}`,
+      `Coin: ${escapeHtml((payment.coin || "unknown").toUpperCase())}`,
+      `Amount: ${escapeHtml(payment.payAmount || "unknown")}`,
+      `Actually paid: ${escapeHtml(payment.actuallyPaid || "unknown")}`,
+      `Status: <b>finished</b>`,
+      `Completed: ${escapeHtml(formatTimestamp(payment.updatedAt))}`,
+    ].join("\n")
+  );
+}
 
   if (newStatus !== "finished" && newStatus !== previousStatus) {
     const userMessage = getUserStatusMessage(newStatus);

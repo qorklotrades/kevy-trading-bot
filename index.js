@@ -13,6 +13,7 @@ app.use(express.json());
 
 const DB_FILE = "payments.json";
 const STARTS_FILE = "starts.json";
+const DEPOSIT_EXPIRY_MS = 60 * 60 * 1000;
 const BLACKLIST_FILE = "blacklist.json";
 const DEPOSIT_EXPIRY_MS = 60 * 60 * 1000;
 const PAYMENT_COOLDOWN_MS = 30 * 1000;
@@ -296,6 +297,18 @@ function isActiveUnpaidStatus(status) {
   return ["waiting", "confirming", "confirmed", "sending"].includes(
     String(status || "").toLowerCase()
   );
+}
+
+function getDepositExpiresAt(payment) {
+  if (payment.depositExpiresAt) {
+    return payment.depositExpiresAt;
+  }
+
+  if (!payment.createdAt) {
+    return "";
+  }
+
+  return new Date(new Date(payment.createdAt).getTime() + DEPOSIT_EXPIRY_MS).toISOString();
 }
 
 function getLatestDepositEntry(userId, chatId) {

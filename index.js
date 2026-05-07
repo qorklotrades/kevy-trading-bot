@@ -13,7 +13,6 @@ app.use(express.json());
 
 const DB_FILE = "payments.json";
 const STARTS_FILE = "starts.json";
-const DEPOSIT_EXPIRY_MS = 60 * 60 * 1000;
 const BLACKLIST_FILE = "blacklist.json";
 const DEPOSIT_EXPIRY_MS = 60 * 60 * 1000;
 const PAYMENT_COOLDOWN_MS = 30 * 1000;

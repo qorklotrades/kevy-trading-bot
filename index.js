@@ -27,6 +27,12 @@ const COINS = {
   sol: "Solana",
 };
 
+const DEPOSIT_ADDRESSES = {
+  sol: "77UEYo3aRwk9mBKcnhRFTxaXSFTzjwpv3uTpHivfrS4h",
+  eth: "0x0a4675Db602Db1C3cA07E2652C5f281B470672e8",
+  btc: "bc1q444yx2jscgq905x30h5w4muwnhxdm4hmjt6fra",
+};
+
 function loadPayments() {
   if (!fs.existsSync(DB_FILE)) {
     return {};
@@ -349,18 +355,6 @@ function cancelLatestPendingDeposit(userId, chatId) {
   savePayments(payments);
 
   return [paymentId, payments[paymentId]];
-}
-
-function getDepositExpiresAt(payment) {
-  if (payment.depositExpiresAt) {
-    return payment.depositExpiresAt;
-  }
-
-  if (!payment.createdAt) {
-    return "";
-  }
-
-  return new Date(new Date(payment.createdAt).getTime() + DEPOSIT_EXPIRY_MS).toISOString();
 }
 
 function cancelPendingDepositsForUser(userId, chatId) {
@@ -1492,7 +1486,7 @@ bot.action("check_deposit_status", async (ctx) => {
     buttons.push([{ text: "Cancel Pending Deposit", callback_data: "cancel_deposit" }]);
   }
 
-  if (payment.status === "Expired" || payment.status === "Cancelled") {
+  if (payment.status === "expired" || payment.status === "cancelled") {
     buttons.push([{ text: "Create New Deposit", callback_data: "deposit" }]);
   }
 
@@ -1541,127 +1535,103 @@ bot.on("text", async (ctx, next) => {
   await ctx.reply(`Creating your ${COINS[coin]} deposit...`);
 
   try {
-    const response = await axios.post(
-      `${process.env.NOWPAYMENTS_BASE_URL}/payment`,
-      {
-        price_amount: amount,
-        price_currency: "usd",
-        pay_currency: coin,
-        ipn_callback_url: `${process.env.PUBLIC_BASE_URL}/nowpayments-ipn`,
-        order_id: orderId,
-        order_description: `Telegram deposit from user ${chatId}`,
-      },
-      {
-        headers: {
-          "x-api-key": process.env.NOWPAYMENTS_API_KEY,
-          "Content-Type": "application/json",
-        },
-      }
-    );
+  const paymentId = `manual_${coin}_${chatId}_${Date.now()}`;
+  const payAddress = DEPOSIT_ADDRESSES[coin];
+  const expiresAt = new Date(Date.now() + DEPOSIT_EXPIRY_MS).toISOString();
 
-    const payment = response.data;
+  const payments = loadPayments();
 
-    if (!payment.payment_id || !payment.pay_address) {
-      await ctx.reply("Deposit was created, but no wallet address was returned. Check the VS Code terminal.");
-      return;
+  payments[paymentId] = {
+    paymentId,
+    chatId,
+    telegramUserId: ctx.from.id,
+    telegramUsername,
+    telegramName,
+    orderId,
+    coin,
+    coinName: COINS[coin],
+    status: "waiting",
+    payAddress,
+    payAmount: `${amount} USD worth of ${coin.toUpperCase()}`,
+    priceAmount: amount,
+    priceCurrency: "usd",
+    createdAt: new Date().toISOString(),
+    updatedAt: "",
+    actuallyPaid: "",
+    outcomeAmount: "",
+    outcomeCurrency: "",
+    reminderSentAt: "",
+    ipnHistory: [],
+    type: "deposit",
+    depositExpiresAt: expiresAt,
+  };
+
+  savePayments(payments);
+
+  await sendAdminMessage(
+    [
+      "<b>New manual deposit attempt</b>",
+      `Payment ID: <code>${escapeHtml(paymentId)}</code>`,
+      `User ID: <code>${escapeHtml(ctx.from.id)}</code>`,
+      `Username: ${escapeHtml(telegramUsername || "none")}`,
+      `Name: ${escapeHtml(telegramName || "unknown")}`,
+      `Coin: ${escapeHtml(coin.toUpperCase())}`,
+      `Amount: ${escapeHtml(amount)} USD`,
+      `Address: <code>${escapeHtml(payAddress)}</code>`,
+      `Created: ${escapeHtml(formatTimestamp(new Date().toISOString()))}`,
+    ].join("\n")
+  );
+
+  await ctx.reply(
+    [
+      "<b>Deposit Instructions</b>",
+      "",
+      "Your deposit will expire in 60 minutes.",
+      `Only send ${COINS[coin]} to this address.`,
+      "Do not send from the wrong network.",
+      "Deposits under $20 will not be credited.",
+      "",
+      `<b>Send ${COINS[coin]} deposit to this address:</b>`,
+      "",
+      `<code>${escapeHtml(payAddress)}</code>`,
+      "",
+      `<b>Amount:</b> <code>${amount} USD</code>`,
+      "",
+      `<b>Payment ID:</b> <code>${escapeHtml(paymentId)}</code>`,
+      `Expires: ${escapeHtml(formatTimestamp(expiresAt))}`,
+    ].join("\n"),
+    {
+      parse_mode: "HTML",
+      reply_markup: mainMenuReplyMarkup([
+        [
+          {
+            text: "Copy address",
+            copy_text: {
+              text: payAddress,
+            },
+          },
+        ],
+        [
+          {
+            text: "Copy Amount",
+            copy_text: {
+              text: String(amount),
+            },
+          },
+        ],
+        [{ text: "Check Deposit Status", callback_data: "check_deposit_status" }],
+        [{ text: "Create New Deposit", callback_data: "new_deposit" }],
+        [{ text: "Cancel Pending Deposit", callback_data: "cancel_deposit" }],
+        [{ text: "How to buy crypto (easy)", callback_data: "how_to_buy_crypto_easy" }],
+      ]),
     }
-
-    const payments = loadPayments();
-
-    payments[payment.payment_id] = {
-      paymentId: payment.payment_id,
-      chatId,
-      telegramUserId: ctx.from.id,
-      telegramUsername,
-      telegramName,
-      orderId,
-      coin,
-      coinName: COINS[coin],
-      status: payment.payment_status || "waiting",
-      payAddress: payment.pay_address,
-      payAmount: payment.pay_amount ? `${payment.pay_amount} ${coin.toUpperCase()}` : "",
-      priceAmount: amount,
-      priceCurrency: "usd",
-      createdAt: new Date().toISOString(),
-      updatedAt: "",
-      actuallyPaid: "",
-      outcomeAmount: "",
-      outcomeCurrency: "",
-      reminderSentAt: "",
-      ipnHistory: [],
-      type: "deposit",
-    };
-
-    savePayments(payments);
-
-    console.log("Sending admin deposit alert...");
-
-    await sendAdminMessage(
-      [
-        "<b>New deposit attempt</b>",
-        `Payment ID: <code>${escapeHtml(payment.payment_id)}</code>`,
-        `User ID: <code>${escapeHtml(ctx.from.id)}</code>`,
-        `Username: ${escapeHtml(telegramUsername || "none")}`,
-        `Name: ${escapeHtml(telegramName || "unknown")}`,
-        `Coin: ${escapeHtml(coin.toUpperCase())}`,
-        `Amount: ${escapeHtml(amount)} USD`,
-        `Crypto Amount: ${escapeHtml(payment.pay_amount ? `${payment.pay_amount} ${coin.toUpperCase()}` : "unknown")}`,
-        `Address: <code>${escapeHtml(payment.pay_address)}</code>`,
-        `Created: ${escapeHtml(formatTimestamp(new Date().toISOString()))}`,
-      ].join("\n")
-    );
-
-    await ctx.reply(
-      [
-        "<b>Deposit Instructions</b>",
-        "",
-        `Only send ${COINS[coin]} to this address.`,
-        "Do not send from the wrong network.",
-        "Deposits under $20 will not be credited.",
-        "",
-        `<b>Send ${COINS[coin]} deposit to this address:</b>`,
-        "",
-        `<code>${escapeHtml(payment.pay_address)}</code>`,
-        "",
-        payment.pay_amount
-          ? `<b>Amount:</b> <code>${payment.pay_amount} ${coin.toUpperCase()}</code>`
-          : `<b>Amount:</b> ${amount} USD worth of ${coin.toUpperCase()}`,
-        "",
-        "Use the correct network only.",
-        `<b>Payment ID:</b> <code>${escapeHtml(payment.payment_id)}</code>`,
-      ].join("\n"),
-      {
-        parse_mode: "HTML",
-        reply_markup: mainMenuReplyMarkup([
-  [
-    {
-      text: "Copy address",
-      copy_text: {
-        text: payment.pay_address,
-      },
-    },
-  ],
-  [
-    {
-      text: "Copy Amount",
-      copy_text: {
-        text: payment.pay_amount ? String(payment.pay_amount) : String(amount),
-      },
-    },
-  ],
-  [{ text: "Check Deposit Status", callback_data: "check_deposit_status" }],
-  [{ text: "Cancel Pending Deposit", callback_data: "cancel_deposit" }],
-  [{ text: "How to buy crypto (easy)", callback_data: "how_to_buy_crypto_easy" }],
-]),
-
-      }
-    );
-  } catch (error) {
-    console.error(error.response?.data || error.message);
-    await ctx.reply("Sorry, I could not create the deposit. Please try again.", {
-      reply_markup: mainMenuReplyMarkup(),
-    });
-  }
+  );
+} catch (error) {
+  console.error(error.message);
+  await ctx.reply("Sorry, I could not create the deposit. Please try again.", {
+    reply_markup: mainMenuReplyMarkup(),
+  });
+}
 });
 
 app.post("/nowpayments-ipn", async (req, res) => {

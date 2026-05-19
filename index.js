@@ -19,7 +19,7 @@ const PAYMENT_COOLDOWN_MS = 30 * 1000;
 const PAYMENT_REMINDER_MS = 30 * 60 * 1000;
 const REMINDER_CHECK_MS = 5 * 60 * 1000;
 const DISPLAY_CURRENCY_CODE = "GBP";
-const DISPLAY_CURRENCY_SYMBOL = "Â£";
+const DISPLAY_CURRENCY_SYMBOL = "£";
 
 const paymentCooldowns = new Map();
 const depositSessions = new Map();
@@ -224,7 +224,7 @@ function getUserStatusMessage(status) {
     partially_paid: "Your payment was received, but it was not the full amount. Please contact @qevybtc.",
     rejected: "Your deposit could not be approved. Please contact @qevybtc.",
     failed: "Your payment failed. Please contact @qevybtc.",
-    expired: "Your payment has expired. Please press â–ªï¸ Deposit to create a new deposit.",
+    expired: "Your payment has expired. Please press ▪️ Deposit to create a new deposit.",
     cancelled: "Your payment was cancelled. Please contact @qevybtc.",
     wrong_asset_confirmed: "The wrong coin or network was detected. Please contact @qevybtc.",
   };
@@ -344,35 +344,35 @@ function getMainMenuKeyboard() {
     [Markup.button.callback("Setup KevyBot", "pay")],
     [Markup.button.callback("My Payment Status", "status")],
     [
-      Markup.button.callback("â–ªï¸ Deposit", "deposit"),
-      Markup.button.callback("â–«ï¸ Withdraw", "withdraw"),
+      Markup.button.callback("▪️ Deposit", "deposit"),
+      Markup.button.callback("▫️ Withdraw", "withdraw"),
     ],
     [
-      Markup.button.callback("ðŸŽ¯ Snipe Bot", "snipe_bot"),
-      Markup.button.callback("âœ¨ Bot Filters", "bot_filters"),
+      Markup.button.callback("🎯 Snipe Bot", "snipe_bot"),
+      Markup.button.callback("✨ Bot Filters", "bot_filters"),
     ],
     [
-      Markup.button.callback("ðŸ“ˆ Example Trade Alert", "example_trade_alert"),
-      Markup.button.callback("âš ï¸ Risk Notice", "risk_notice"),
+      Markup.button.callback("📈 Example Trade Alert", "example_trade_alert"),
+      Markup.button.callback("⚠️ Risk Notice", "risk_notice"),
     ],
     [
-      Markup.button.callback("ðŸ§‘â€ðŸ« New To Crypto?", "new_to_crypto"),
-      Markup.button.callback("ðŸ“˜ Deposit Guide", "deposit_guide"),
+      Markup.button.callback("🧑‍🏫 New To Crypto?", "new_to_crypto"),
+      Markup.button.callback("📘 Deposit Guide", "deposit_guide"),
     ],
     [
-      Markup.button.callback("ðŸ“Š Account", "account"),
-      Markup.button.callback("ðŸŽ Referral", "referral"),
+      Markup.button.callback("📊 Account", "account"),
+      Markup.button.callback("🎁 Referral", "referral"),
     ],
     [
-      Markup.button.callback("ðŸ‘¥ Help", "help"),
-      Markup.button.callback("ðŸ“• Support", "support"),
+      Markup.button.callback("👥 Help", "help"),
+      Markup.button.callback("📕 Support", "support"),
     ],
     [
-      Markup.button.callback("ðŸ“Œ Terms", "terms"),
-      Markup.button.callback("ðŸ”” Updates", "updates"),
+      Markup.button.callback("📌 Terms", "terms"),
+      Markup.button.callback("🔔 Updates", "updates"),
     ],
-    [Markup.button.callback("â“ FAQ", "faq")],
-    [Markup.button.callback("ðŸ’  How To Buy Crypto", "how_to_buy_crypto")],
+    [Markup.button.callback("❓ FAQ", "faq")],
+    [Markup.button.callback("💠 How To Buy Crypto", "how_to_buy_crypto")],
   ]);
 }
 
@@ -380,7 +380,7 @@ function mainMenuReplyMarkup(extraRows = []) {
   return {
     inline_keyboard: [
       ...extraRows,
-      [{ text: "â¬…ï¸ Main Menu", callback_data: "main_menu" }],
+      [{ text: "⬅️ Main Menu", callback_data: "main_menu" }],
     ],
   };
 }
@@ -626,7 +626,7 @@ function getDepositGuideLines(coin) {
   const warning = coin && NETWORK_WARNINGS[coin] ? NETWORK_WARNINGS[coin] : "Always use the correct coin and network.";
 
   return [
-    "<b>ðŸ“˜ Deposit Guide</b>",
+    "<b>📘 Deposit Guide</b>",
     "",
     "1. Copy the wallet address.",
     `2. Open your wallet or exchange and choose ${coinText}.`,
@@ -1061,7 +1061,7 @@ bot.command("confirm", async (ctx) => {
 
   await sendAdminMessage(
     [
-      "<b>âœ… Manual deposit confirmed</b>",
+      "<b>✅ Manual deposit confirmed</b>",
       "",
       `Payment ID: <code>${escapeHtml(paymentId)}</code>`,
       `User ID: <code>${escapeHtml(payment.telegramUserId || payment.chatId || "unknown")}</code>`,
@@ -1576,7 +1576,7 @@ bot.action("account", async (ctx) => {
 
   await ctx.reply(
     [
-      "<b>ðŸ“Š Account</b>",
+      "<b>📊 Account</b>",
       "",
       `User ID: <code>${escapeHtml(ctx.from.id)}</code>`,
       `Username: ${escapeHtml(ctx.from.username ? `@${ctx.from.username}` : "none")}`,
@@ -1585,15 +1585,15 @@ bot.action("account", async (ctx) => {
       latestPayment ? `Latest Status: ${escapeHtml(latestPayment[1].status || "unknown")}` : "Latest Status: none",
       latestPayment ? `Created: ${escapeHtml(formatTimestamp(latestPayment[1].createdAt))}` : "Created: not updated yet",
       "",
-      "<b>ðŸ’° Balance</b>",
+      "<b>💰 Balance</b>",
       "",
       `Account Balance: <b>${DISPLAY_CURRENCY_SYMBOL}${balanceStats.accountBalance.toFixed(2)}</b>`,
       `Total Deposited: <b>${DISPLAY_CURRENCY_SYMBOL}${balanceStats.totalDeposited.toFixed(2)}</b>`,
       `Total Withdrawn: <b>${DISPLAY_CURRENCY_SYMBOL}${balanceStats.totalWithdrawn.toFixed(2)}</b>`,
       "",
-      "<b>ðŸ“ˆ PnL Tracker</b>",
+      "<b>📈 PnL Tracker</b>",
       "",
-      `Todayâ€™s PnL: <b>${DISPLAY_CURRENCY_SYMBOL}${todayPnl.toFixed(2)}</b>`,
+      `Today’s PnL: <b>${DISPLAY_CURRENCY_SYMBOL}${todayPnl.toFixed(2)}</b>`,
       `Overall PnL: <b>${DISPLAY_CURRENCY_SYMBOL}${overallPnl.toFixed(2)}</b>`,
       `Total Trades: <b>${totalTrades}</b>`,
       `Winning Trades: <b>${winningTrades}</b>`,
@@ -1614,7 +1614,7 @@ bot.action("referral", async (ctx) => {
 
   await ctx.reply(
     [
-      "<b>ðŸŽ Referral</b>",
+      "<b>🎁 Referral</b>",
       "",
       "Your referral link:",
       `<code>${escapeHtml(referralLink)}</code>`,
@@ -1631,7 +1631,7 @@ bot.action("terms", async (ctx) => {
 
   await ctx.reply(
     [
-      "<b>ðŸ“Œ Terms</b>",
+      "<b>📌 Terms</b>",
       "",
       "We offer full refunds if you are not satisfied with the bot.",
       "Always send funds using the correct coin and network.",
@@ -1650,7 +1650,7 @@ bot.action("updates", async (ctx) => {
 
   await ctx.reply(
     [
-      "<b>ðŸ”” Updates</b>",
+      "<b>🔔 Updates</b>",
       "",
       "Updates channel: https://t.me/kevybotupdates",
     ].join("\n"),
@@ -1666,13 +1666,13 @@ bot.action("faq", async (ctx) => {
 
   await ctx.reply(
     [
-      "<b>â“ FAQ</b>",
+      "<b>❓ FAQ</b>",
       "",
       "<b>How do I setup KevyBot?</b>",
       "Press Setup KevyBot and follow the steps shown.",
       "",
       "<b>How do I deposit?</b>",
-      "Press â–ªï¸ Deposit, choose Solana, Bitcoin, or Ethereum, then enter the amount you want to deposit.",
+      "Press ▪️ Deposit, choose Solana, Bitcoin, or Ethereum, then enter the amount you want to deposit.",
       "",
       "<b>What is the minimum deposit?</b>",
       `The minimum deposit is ${DISPLAY_CURRENCY_SYMBOL}20.`,
@@ -1746,7 +1746,7 @@ bot.action("new_deposit", async (ctx) => {
   } catch (error) {
     console.error("New deposit error:", error.message);
 
-    await ctx.reply("Sorry, I could not create a new deposit menu. Please press â–ªï¸ Deposit from the main menu.", {
+    await ctx.reply("Sorry, I could not create a new deposit menu. Please press ▪️ Deposit from the main menu.", {
       reply_markup: mainMenuReplyMarkup(),
     });
   }
@@ -1799,8 +1799,8 @@ bot.action("withdraw", async (ctx) => {
     {
       parse_mode: "HTML",
       reply_markup: mainMenuReplyMarkup([
-        [{ text: "ðŸ¦ Bank Transfer", callback_data: "withdraw_bank" }],
-        [{ text: "ðŸª™ Crypto Wallet", callback_data: "withdraw_crypto" }],
+        [{ text: "🏦 Bank Transfer", callback_data: "withdraw_bank" }],
+        [{ text: "🪙 Crypto Wallet", callback_data: "withdraw_crypto" }],
       ]),
     }
   );
@@ -1813,7 +1813,7 @@ bot.action("withdraw_bank", async (ctx) => {
 
   await ctx.reply(
     [
-      "<b>ðŸ¦ Bank Transfer Withdrawal</b>",
+      "<b>🏦 Bank Transfer Withdrawal</b>",
       "",
       `Available balance: <b>${DISPLAY_CURRENCY_SYMBOL}${balanceStats.accountBalance.toFixed(2)}</b>`,
       "",
@@ -1834,7 +1834,7 @@ bot.action("withdraw_crypto", async (ctx) => {
 
   await ctx.reply(
     [
-      "<b>ðŸª™ Crypto Wallet Withdrawal</b>",
+      "<b>🪙 Crypto Wallet Withdrawal</b>",
       "",
       `Available balance: <b>${DISPLAY_CURRENCY_SYMBOL}${balanceStats.accountBalance.toFixed(2)}</b>`,
       "",
@@ -1883,7 +1883,7 @@ bot.action("example_trade_alert", async (ctx) => {
 
   await ctx.reply(
     [
-      "<b>ðŸ“ˆ Example Trade Alert</b>",
+      "<b>📈 Example Trade Alert</b>",
       "",
       "Kevy has opened a trade.",
       "",
@@ -1909,7 +1909,7 @@ bot.action("risk_notice", async (ctx) => {
 
   await ctx.reply(
     [
-      "<b>âš ï¸ Risk Notice</b>",
+      "<b>⚠️ Risk Notice</b>",
       "",
       "Trading involves risk and results are not guaranteed.",
       "Only deposit funds you are comfortable using.",
@@ -1940,7 +1940,7 @@ bot.action("new_to_crypto", async (ctx) => {
 
   await ctx.reply(
     [
-      "<b>ðŸ§‘â€ðŸ« New To Crypto?</b>",
+      "<b>🧑‍🏫 New To Crypto?</b>",
       "",
       "<b>Wallet address:</b> This is where you send crypto. Copy it exactly.",
       "<b>Network:</b> This is the blockchain route. The coin and network must match.",
@@ -1963,7 +1963,7 @@ bot.action("how_to_buy_crypto", async (ctx) => {
 
   await ctx.reply(
     [
-      "<b>How To Buy CryptoðŸ“ˆ</b>",
+      "<b>How To Buy Crypto📈</b>",
       "",
       "<b>https://www.youtube.com/watch?v=TryloIYvi1U</b>",
     ].join("\n"),
@@ -2070,17 +2070,17 @@ bot.action("pay", async (ctx) => {
 
   await ctx.reply(
     [
-      "<b>ðŸ“• How to setup KevyBot</b>",
+      "<b>📕 How to setup KevyBot</b>",
       "",
-      "1ï¸âƒ£ Press the â–ªï¸Deposit button to deposit funds into your account",
+      "1️⃣ Press the ▪️Deposit button to deposit funds into your account",
       "",
-      "2ï¸âƒ£ Pick your preset of filters in âœ¨ Bot Filters",
+      "2️⃣ Pick your preset of filters in ✨ Bot Filters",
       "",
-      "3ï¸âƒ£ Let Kevy run in the backround while you enjoy your day",
+      "3️⃣ Let Kevy run in the backround while you enjoy your day",
       "",
-      "4ï¸âƒ£ You will be alerted when Kevy makes a trade for you and explains how much profit you are in.",
+      "4️⃣ You will be alerted when Kevy makes a trade for you and explains how much profit you are in.",
       "",
-      "5ï¸âƒ£ Withdraw using the â–«ï¸ Withdraw button and selecting which way you would like to recieve your funds.",
+      "5️⃣ Withdraw using the ▫️ Withdraw button and selecting which way you would like to recieve your funds.",
     ].join("\n"),
     {
       parse_mode: "HTML",
@@ -2092,7 +2092,7 @@ bot.action("pay", async (ctx) => {
 bot.action(/^coin:(btc|eth|sol)$/, async (ctx) => {
   await ctx.answerCbQuery();
 
-  await ctx.reply("This payment option is no longer available. Please use â–ªï¸ Deposit instead.", {
+  await ctx.reply("This payment option is no longer available. Please use ▪️ Deposit instead.", {
     reply_markup: mainMenuReplyMarkup(),
   });
 });
@@ -2287,7 +2287,7 @@ bot.on("text", async (ctx, next) => {
 
       await sendAdminMessage(
         [
-          "<b>âœ… Blockchain deposit verified</b>",
+          "<b>✅ Blockchain deposit verified</b>",
           "",
           `Payment ID: <code>${escapeHtml(verificationSession.paymentId)}</code>`,
           `User ID: <code>${escapeHtml(payment.telegramUserId || payment.chatId || "unknown")}</code>`,
@@ -2304,7 +2304,7 @@ bot.on("text", async (ctx, next) => {
 
       await ctx.reply(
         [
-          "<b>âœ… Deposit verified</b>",
+          "<b>✅ Deposit verified</b>",
           "",
           "Your deposit has been confirmed. Your account has been updated.",
           "",
@@ -2337,7 +2337,7 @@ bot.on("text", async (ctx, next) => {
     return;
   }
 
-  const amountText = ctx.message.text.replace(/[Â£$,]/g, "").trim();
+  const amountText = ctx.message.text.replace(/[£$,]/g, "").trim();
   const amount = Number.parseFloat(amountText);
 
   if (!Number.isFinite(amount) || amount <= 0) {
@@ -2548,8 +2548,8 @@ app.post("/nowpayments-ipn", async (req, res) => {
     await sendAdminMessage(
       [
         newStatus === "finished"
-          ? "<b>âœ… Payment completed</b>"
-          : "<b>âš ï¸ Payment partially paid</b>",
+          ? "<b>✅ Payment completed</b>"
+          : "<b>⚠️ Payment partially paid</b>",
         "",
         `Payment ID: <code>${escapeHtml(payment_id)}</code>`,
         `User ID: <code>${escapeHtml(payment.telegramUserId || payment.chatId || "unknown")}</code>`,

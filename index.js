@@ -3,6 +3,7 @@ require("dotenv").config();
 const fs = require("fs");
 const crypto = require("crypto");
 const express = require("express");
+const axios = require("axios");
 const { Telegraf, Markup } = require("telegraf");
 
 const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN);
@@ -22,6 +23,7 @@ const DISPLAY_CURRENCY_SYMBOL = "£";
 
 const paymentCooldowns = new Map();
 const depositSessions = new Map();
+const verificationSessions = new Map();
 
 const COINS = {
   btc: "Bitcoin",
@@ -33,6 +35,18 @@ const DEPOSIT_ADDRESSES = {
   sol: "77UEYo3aRwk9mBKcnhRFTxaXSFTzjwpv3uTpHivfrS4h",
   eth: "0x0a4675Db602Db1C3cA07E2652C5f281B470672e8",
   btc: "bc1q444yx2jscgq905x30h5w4muwnhxdm4hmjt6fra",
+};
+
+const NETWORK_WARNINGS = {
+  sol: "Only send SOL on the Solana network.",
+  eth: "Only send ETH on the Ethereum ERC-20 network.",
+  btc: "Only send BTC on the Bitcoin network.",
+};
+
+const EXPLORER_LINKS = {
+  sol: "https://solscan.io/tx/",
+  eth: "https://etherscan.io/tx/",
+  btc: "https://blockstream.info/tx/",
 };
 
 function loadPayments() {
@@ -88,6 +102,14 @@ function addToBlacklist(userId) {
   }
 
   saveBlacklist(blacklist);
+}
+
+function removeFromBlacklist(userId) {
+  const blacklist = loadBlacklist();
+  const nextBlacklist = blacklist.filter((item) => String(item) !== String(userId));
+  saveBlacklist(nextBlacklist);
+
+  return blacklist.length !== nextBlacklist.length;
 }
 
 function escapeHtml(text) {
@@ -182,6 +204,7 @@ function getStatusExplanation(status) {
     sending: "Payment confirmed and finalising",
     finished: "Payment successful",
     partially_paid: "Partially paid - contact support @qevybtc",
+    rejected: "Payment rejected - contact support @qevybtc",
     failed: "Payment failed - contact support @qevybtc",
     expired: "Payment expired - create a new deposit",
     cancelled: "Payment cancelled",
@@ -199,6 +222,7 @@ function getUserStatusMessage(status) {
     confirmed: "Payment confirmed. Finalising your access...",
     sending: "Payment confirmed. Finalising your access...",
     partially_paid: "Your payment was received, but it was not the full amount. Please contact @qevybtc.",
+    rejected: "Your deposit could not be approved. Please contact @qevybtc.",
     failed: "Your payment failed. Please contact @qevybtc.",
     expired: "Your payment has expired. Please press ▪️ Deposit to create a new deposit.",
     cancelled: "Your payment was cancelled. Please contact @qevybtc.",
@@ -249,6 +273,32 @@ function getDepositExpiresAt(payment) {
   }
 
   return new Date(new Date(payment.createdAt).getTime() + DEPOSIT_EXPIRY_MS).toISOString();
+}
+
+function formatTimeRemaining(value) {
+  if (!value) {
+    return "not updated yet";
+  }
+
+  const remainingMs = new Date(value).getTime() - Date.now();
+
+  if (remainingMs <= 0) {
+    return "expired";
+  }
+
+  const totalMinutes = Math.ceil(remainingMs / (60 * 1000));
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+
+  if (hours > 0 && minutes > 0) {
+    return `${hours}h ${minutes}m`;
+  }
+
+  if (hours > 0) {
+    return `${hours}h`;
+  }
+
+  return `${minutes}m`;
 }
 
 function expireOldPendingDeposits() {
@@ -306,6 +356,10 @@ function getMainMenuKeyboard() {
       Markup.button.callback("⚠️ Risk Notice", "risk_notice"),
     ],
     [
+      Markup.button.callback("🧑‍🏫 New To Crypto?", "new_to_crypto"),
+      Markup.button.callback("📘 Deposit Guide", "deposit_guide"),
+    ],
+    [
       Markup.button.callback("📊 Account", "account"),
       Markup.button.callback("🎁 Referral", "referral"),
     ],
@@ -360,12 +414,13 @@ function formatTransaction(paymentId, payment, number) {
     `Coin: ${escapeHtml((payment.coin || "unknown").toUpperCase())}`,
     `Amount: ${escapeHtml(payment.payAmount || "unknown")}`,
     `Address: <code>${escapeHtml(payment.payAddress || "unknown")}</code>`,
+    payment.txHash ? `TX Hash: <code>${escapeHtml(payment.txHash)}</code>` : "",
     `User ID: <code>${escapeHtml(payment.telegramUserId || payment.chatId || "unknown")}</code>`,
     `Username: ${escapeHtml(payment.telegramUsername || "none")}`,
     `Name: ${escapeHtml(payment.telegramName || "unknown")}`,
     `Created: ${escapeHtml(formatTimestamp(payment.createdAt))}`,
     `Updated: ${escapeHtml(formatTimestamp(payment.updatedAt))}`,
-  ].join("\n");
+  ].filter(Boolean).join("\n");
 }
 
 function getPaymentCooldownSeconds(userId) {
@@ -450,6 +505,18 @@ function cancelPendingDepositsForUser(userId, chatId) {
   }
 }
 
+function transactionHashAlreadyUsed(txHash, currentPaymentId) {
+  const payments = loadPayments();
+  const cleanTxHash = String(txHash || "").trim().toLowerCase();
+
+  return Object.entries(payments).some(([paymentId, payment]) => {
+    return (
+      paymentId !== currentPaymentId &&
+      String(payment.txHash || "").trim().toLowerCase() === cleanTxHash
+    );
+  });
+}
+
 async function sendDepositCoinMenu(ctx) {
   await ctx.reply(
     "<b>Please select which crypto currency you would like to deposit funds into your account with.</b>",
@@ -504,10 +571,12 @@ function formatDepositStatus(paymentId, payment) {
     `<b>Coin:</b> ${escapeHtml((payment.coin || "unknown").toUpperCase())}`,
     `<b>Amount:</b> ${escapeHtml(payment.payAmount || "unknown")}`,
     `<b>Address:</b> <code>${escapeHtml(payment.payAddress || "unknown")}</code>`,
+    payment.txHash ? `<b>TX Hash:</b> <code>${escapeHtml(payment.txHash)}</code>` : "",
     `<b>Expires:</b> ${escapeHtml(expiresAt ? formatTimestamp(expiresAt) : "not updated yet")}`,
+    `<b>Expires in:</b> ${escapeHtml(formatTimeRemaining(expiresAt))}`,
     `<b>Created:</b> ${escapeHtml(formatTimestamp(payment.createdAt))}`,
     `<b>Updated:</b> ${escapeHtml(formatTimestamp(payment.updatedAt))}`,
-  ].join("\n");
+  ].filter(Boolean).join("\n");
 }
 
 function getDepositButtons(payment) {
@@ -536,57 +605,254 @@ function getDepositButtons(payment) {
   }
 
   if (isActiveUnpaidStatus(payment.status)) {
+    buttons.push([{ text: "I Have Paid", callback_data: "submit_tx_hash" }]);
     buttons.push([{ text: "Check Deposit Status", callback_data: "check_deposit_status" }]);
     buttons.push([{ text: "Create New Deposit", callback_data: "new_deposit" }]);
     buttons.push([{ text: "Cancel Pending Deposit", callback_data: "cancel_deposit" }]);
   }
 
-  if (["expired", "cancelled"].includes(String(payment.status || "").toLowerCase())) {
+  if (["expired", "cancelled", "rejected", "failed"].includes(String(payment.status || "").toLowerCase())) {
     buttons.push([{ text: "Create New Deposit", callback_data: "new_deposit" }]);
   }
 
+  buttons.push([{ text: "Deposit Guide", callback_data: "deposit_guide" }]);
   buttons.push([{ text: "How to buy crypto (easy)", callback_data: "how_to_buy_crypto_easy" }]);
 
   return buttons;
 }
 
-async function sendPaymentReminderIfNeeded(paymentId) {
-  expireOldPendingDeposits();
+function getDepositGuideLines(coin) {
+  const coinText = coin && COINS[coin] ? COINS[coin] : "crypto";
+  const warning = coin && NETWORK_WARNINGS[coin] ? NETWORK_WARNINGS[coin] : "Always use the correct coin and network.";
 
-  const payments = loadPayments();
-  const payment = payments[paymentId];
-
-  if (!payment || payment.reminderSentAt || !isActiveUnpaidStatus(payment.status)) {
-    return;
-  }
-
-  const createdAt = payment.createdAt ? new Date(payment.createdAt).getTime() : 0;
-
-  if (!createdAt || Date.now() - createdAt < PAYMENT_REMINDER_MS) {
-    return;
-  }
-
-  payment.reminderSentAt = new Date().toISOString();
-  savePayments(payments);
-
-  await bot.telegram.sendMessage(
-    payment.chatId,
-    "Your deposit is still waiting. Complete it, check the status, or cancel it to create a new one.",
-    {
-      reply_markup: mainMenuReplyMarkup([
-        [{ text: "Check Deposit Status", callback_data: "check_deposit_status" }],
-        [{ text: "Cancel Pending Deposit", callback_data: "cancel_deposit" }],
-      ]),
-    }
-  );
+  return [
+    "<b>📘 Deposit Guide</b>",
+    "",
+    "1. Copy the wallet address.",
+    `2. Open your wallet or exchange and choose ${coinText}.`,
+    "3. Paste the wallet address carefully.",
+    "4. Enter the deposit amount.",
+    `5. ${warning}`,
+    "6. Send the payment.",
+    "7. Come back here and press I Have Paid.",
+    "8. Paste your transaction hash so Kevy can verify it.",
+    "",
+    "<b>Important:</b>",
+    "Keep your Payment ID safe. You may need it for support.",
+  ];
 }
 
-async function scanPaymentReminders() {
-  const payments = loadPayments();
+async function verifySolanaTransaction(txHash, expectedAddress) {
+  const rpcUrl = process.env.SOLANA_RPC_URL || "https://api.mainnet-beta.solana.com";
+  const response = await axios.post(
+    rpcUrl,
+    {
+      jsonrpc: "2.0",
+      id: 1,
+      method: "getTransaction",
+      params: [
+        txHash,
+        {
+          encoding: "jsonParsed",
+          commitment: "confirmed",
+          maxSupportedTransactionVersion: 0,
+        },
+      ],
+    },
+    {
+      timeout: 15000,
+    }
+  );
 
-  for (const paymentId of Object.keys(payments)) {
-    await sendPaymentReminderIfNeeded(paymentId);
+  const transaction = response.data && response.data.result;
+
+  if (!transaction) {
+    return {
+      ok: false,
+      detail: "Transaction was not found or is not confirmed yet.",
+    };
   }
+
+  if (transaction.meta && transaction.meta.err) {
+    return {
+      ok: false,
+      detail: "Transaction exists but failed on-chain.",
+    };
+  }
+
+  const accountKeys = transaction.transaction.message.accountKeys || [];
+  const keyIndex = accountKeys.findIndex((key) => {
+    const pubkey = typeof key === "string" ? key : key.pubkey;
+    return String(pubkey) === String(expectedAddress);
+  });
+
+  if (keyIndex === -1) {
+    return {
+      ok: false,
+      detail: "Transaction was not sent to the Kevy Solana deposit address.",
+    };
+  }
+
+  const preBalance = Number(transaction.meta.preBalances[keyIndex] || 0);
+  const postBalance = Number(transaction.meta.postBalances[keyIndex] || 0);
+  const lamportsReceived = postBalance - preBalance;
+
+  if (lamportsReceived <= 0) {
+    return {
+      ok: false,
+      detail: "Transaction did not increase the Kevy Solana deposit address balance.",
+    };
+  }
+
+  return {
+    ok: true,
+    amount: lamportsReceived / 1_000_000_000,
+    currency: "SOL",
+    detail: "Solana transaction verified.",
+  };
+}
+
+async function verifyEthereumTransaction(txHash, expectedAddress) {
+  const apiKey = process.env.ETHERSCAN_API_KEY || "";
+  const apiUrl = process.env.ETHERSCAN_API_URL || "https://api.etherscan.io/v2/api";
+  const chainId = process.env.ETHERSCAN_CHAIN_ID || "1";
+  const transactionResponse = await axios.get(apiUrl, {
+    timeout: 15000,
+    params: {
+      chainid: chainId,
+      module: "proxy",
+      action: "eth_getTransactionByHash",
+      txhash: txHash,
+      apikey: apiKey,
+    },
+  });
+
+  const transaction = transactionResponse.data && transactionResponse.data.result;
+
+  if (!transaction) {
+    return {
+      ok: false,
+      detail: "Ethereum transaction was not found.",
+    };
+  }
+
+  if (String(transaction.to || "").toLowerCase() !== String(expectedAddress).toLowerCase()) {
+    return {
+      ok: false,
+      detail: "Transaction was not sent to the Kevy Ethereum deposit address.",
+    };
+  }
+
+  const receiptResponse = await axios.get(apiUrl, {
+    timeout: 15000,
+    params: {
+      chainid: chainId,
+      module: "proxy",
+      action: "eth_getTransactionReceipt",
+      txhash: txHash,
+      apikey: apiKey,
+    },
+  });
+
+  const receipt = receiptResponse.data && receiptResponse.data.result;
+
+  if (!receipt || !receipt.blockNumber) {
+    return {
+      ok: false,
+      detail: "Ethereum transaction is not confirmed yet.",
+    };
+  }
+
+  if (receipt.status && receipt.status !== "0x1") {
+    return {
+      ok: false,
+      detail: "Ethereum transaction exists but failed on-chain.",
+    };
+  }
+
+  const valueWei = BigInt(transaction.value || "0x0");
+
+  if (valueWei <= 0n) {
+    return {
+      ok: false,
+      detail: "Ethereum transaction did not send any ETH.",
+    };
+  }
+
+  const whole = valueWei / 1_000_000_000_000_000_000n;
+  const fraction = valueWei % 1_000_000_000_000_000_000n;
+  const amount = Number(`${whole}.${fraction.toString().padStart(18, "0").slice(0, 8)}`);
+
+  return {
+    ok: true,
+    amount,
+    currency: "ETH",
+    detail: "Ethereum transaction verified.",
+  };
+}
+
+async function verifyBitcoinTransaction(txHash, expectedAddress) {
+  const apiUrl = process.env.BLOCKSTREAM_API_URL || "https://blockstream.info/api";
+  const response = await axios.get(`${apiUrl}/tx/${encodeURIComponent(txHash)}`, {
+    timeout: 15000,
+  });
+
+  const transaction = response.data;
+
+  if (!transaction || !Array.isArray(transaction.vout)) {
+    return {
+      ok: false,
+      detail: "Bitcoin transaction was not found.",
+    };
+  }
+
+  if (!transaction.status || !transaction.status.confirmed) {
+    return {
+      ok: false,
+      detail: "Bitcoin transaction is not confirmed yet.",
+    };
+  }
+
+  const receivedSats = transaction.vout.reduce((total, output) => {
+    if (String(output.scriptpubkey_address || "") === String(expectedAddress)) {
+      return total + Number(output.value || 0);
+    }
+
+    return total;
+  }, 0);
+
+  if (receivedSats <= 0) {
+    return {
+      ok: false,
+      detail: "Transaction was not sent to the Kevy Bitcoin deposit address.",
+    };
+  }
+
+  return {
+    ok: true,
+    amount: receivedSats / 100_000_000,
+    currency: "BTC",
+    detail: "Bitcoin transaction verified.",
+  };
+}
+
+async function verifyBlockchainTransaction(coin, txHash, expectedAddress) {
+  if (coin === "sol") {
+    return verifySolanaTransaction(txHash, expectedAddress);
+  }
+
+  if (coin === "eth") {
+    return verifyEthereumTransaction(txHash, expectedAddress);
+  }
+
+  if (coin === "btc") {
+    return verifyBitcoinTransaction(txHash, expectedAddress);
+  }
+
+  return {
+    ok: false,
+    detail: "Unsupported coin.",
+  };
 }
 
 function sortObject(obj) {
@@ -620,6 +886,46 @@ function verifyNowPaymentsSignature(body, receivedSignature) {
       Buffer.from(receivedSignature)
     )
   );
+}
+
+async function sendPaymentReminderIfNeeded(paymentId) {
+  expireOldPendingDeposits();
+
+  const payments = loadPayments();
+  const payment = payments[paymentId];
+
+  if (!payment || payment.reminderSentAt || !isActiveUnpaidStatus(payment.status)) {
+    return;
+  }
+
+  const createdAt = payment.createdAt ? new Date(payment.createdAt).getTime() : 0;
+
+  if (!createdAt || Date.now() - createdAt < PAYMENT_REMINDER_MS) {
+    return;
+  }
+
+  payment.reminderSentAt = new Date().toISOString();
+  savePayments(payments);
+
+  await bot.telegram.sendMessage(
+    payment.chatId,
+    "Your deposit is still waiting. Complete it, check the status, or cancel it to create a new one.",
+    {
+      reply_markup: mainMenuReplyMarkup([
+        [{ text: "I Have Paid", callback_data: "submit_tx_hash" }],
+        [{ text: "Check Deposit Status", callback_data: "check_deposit_status" }],
+        [{ text: "Cancel Pending Deposit", callback_data: "cancel_deposit" }],
+      ]),
+    }
+  );
+}
+
+async function scanPaymentReminders() {
+  const payments = loadPayments();
+
+  for (const paymentId of Object.keys(payments)) {
+    await sendPaymentReminderIfNeeded(paymentId);
+  }
 }
 
 bot.use(async (ctx, next) => {
@@ -671,6 +977,53 @@ bot.command("blacklist", async (ctx) => {
       "",
       `User ID: <code>${escapeHtml(userId)}</code>`,
       "This user can no longer use the bot.",
+    ].join("\n"),
+    {
+      parse_mode: "HTML",
+    }
+  );
+});
+
+bot.command("unblacklist", async (ctx) => {
+  if (!isAdmin(ctx)) {
+    await ctx.reply("You are not allowed to use this command.");
+    return;
+  }
+
+  const userId = ctx.message.text.split(" ")[1];
+
+  if (!userId) {
+    await ctx.reply("Use it like this: /unblacklist USER_ID");
+    return;
+  }
+
+  const removed = removeFromBlacklist(userId);
+
+  await ctx.reply(
+    removed
+      ? `User ${userId} has been removed from the blacklist.`
+      : `User ${userId} was not blacklisted.`
+  );
+});
+
+bot.command("blacklistlist", async (ctx) => {
+  if (!isAdmin(ctx)) {
+    await ctx.reply("You are not allowed to use this command.");
+    return;
+  }
+
+  const blacklist = loadBlacklist();
+
+  if (blacklist.length === 0) {
+    await ctx.reply("No blacklisted users.");
+    return;
+  }
+
+  await ctx.reply(
+    [
+      "<b>Blacklisted Users</b>",
+      "",
+      ...blacklist.map((userId, index) => `${index + 1}. <code>${escapeHtml(userId)}</code>`),
     ].join("\n"),
     {
       parse_mode: "HTML",
@@ -732,6 +1085,87 @@ bot.command("confirm", async (ctx) => {
   await ctx.reply("Deposit confirmed.");
 });
 
+bot.command("reject", async (ctx) => {
+  if (!isAdmin(ctx)) {
+    await ctx.reply("You are not allowed to use this command.");
+    return;
+  }
+
+  const paymentId = ctx.message.text.split(" ")[1];
+
+  if (!paymentId) {
+    await ctx.reply("Use it like this: /reject PAYMENT_ID");
+    return;
+  }
+
+  const payments = loadPayments();
+  const payment = payments[paymentId];
+
+  if (!payment) {
+    await ctx.reply("Payment not found.");
+    return;
+  }
+
+  payment.status = "rejected";
+  payment.updatedAt = new Date().toISOString();
+
+  savePayments(payments);
+
+  await bot.telegram.sendMessage(
+    payment.chatId,
+    "Your deposit could not be verified. Please contact @qevybtc if you need help.",
+    {
+      reply_markup: mainMenuReplyMarkup([
+        [{ text: "Create New Deposit", callback_data: "new_deposit" }],
+      ]),
+    }
+  );
+
+  await ctx.reply("Deposit rejected.");
+});
+
+bot.command("pending", async (ctx) => {
+  if (!isAdmin(ctx)) {
+    await ctx.reply("You are not allowed to use this command.");
+    return;
+  }
+
+  expireOldPendingDeposits();
+
+  const payments = loadPayments();
+  const pendingEntries = Object.entries(payments).filter(
+    ([paymentId, payment]) => payment.type === "deposit" && isActiveUnpaidStatus(payment.status)
+  );
+
+  if (pendingEntries.length === 0) {
+    await ctx.reply("No pending deposits.");
+    return;
+  }
+
+  const latestPending = pendingEntries.slice(-15);
+
+  await ctx.reply(
+    latestPending.map(([paymentId, payment], index) => {
+      return [
+        `<b>${index + 1}. Pending Deposit</b>`,
+        `Payment ID: <code>${escapeHtml(paymentId)}</code>`,
+        `User ID: <code>${escapeHtml(payment.telegramUserId || payment.chatId || "unknown")}</code>`,
+        `Username: ${escapeHtml(payment.telegramUsername || "none")}`,
+        `Name: ${escapeHtml(payment.telegramName || "unknown")}`,
+        `Coin: ${escapeHtml((payment.coin || "unknown").toUpperCase())}`,
+        `Amount: ${escapeHtml(payment.payAmount || "unknown")}`,
+        `Address: <code>${escapeHtml(payment.payAddress || "unknown")}</code>`,
+        `Expires in: ${escapeHtml(formatTimeRemaining(getDepositExpiresAt(payment)))}`,
+        payment.txHash ? `TX Hash: <code>${escapeHtml(payment.txHash)}</code>` : "",
+        `Created: ${escapeHtml(formatTimestamp(payment.createdAt))}`,
+      ].filter(Boolean).join("\n");
+    }).join("\n\n"),
+    {
+      parse_mode: "HTML",
+    }
+  );
+});
+
 bot.command("commands", async (ctx) => {
   if (!isAdmin(ctx)) {
     await ctx.reply("You are not allowed to use this command.");
@@ -745,7 +1179,11 @@ bot.command("commands", async (ctx) => {
       "<code>/commands</code> - Shows this command list",
       "<code>/myid</code> - Shows your Telegram user ID",
       "<code>/blacklist USER_ID</code> - Blocks a user from using the bot",
+      "<code>/unblacklist USER_ID</code> - Removes a user from the blacklist",
+      "<code>/blacklistlist</code> - Shows blacklisted users",
+      "<code>/pending</code> - Shows pending deposits",
       "<code>/confirm PAYMENT_ID</code> - Manually confirms a deposit",
+      "<code>/reject PAYMENT_ID</code> - Rejects a deposit",
       "<code>/stats</code> - Shows total bot stats",
       "<code>/today</code> - Shows today's transactions",
       "<code>/revenue</code> - Shows estimated revenue",
@@ -814,6 +1252,7 @@ bot.command("stats", async (ctx) => {
       `Confirming: ${countStatus("confirming")}`,
       `Expired: ${countStatus("expired")}`,
       `Cancelled: ${countStatus("cancelled")}`,
+      `Rejected: ${countStatus("rejected")}`,
       `Failed: ${countStatus("failed")}`,
       "",
       "<b>Money</b>",
@@ -1238,6 +1677,9 @@ bot.action("faq", async (ctx) => {
       "<b>What is the minimum deposit?</b>",
       `The minimum deposit is ${DISPLAY_CURRENCY_SYMBOL}20.`,
       "",
+      "<b>How do I verify a deposit?</b>",
+      "Press I Have Paid and paste your transaction hash.",
+      "",
       "<b>How long does payment take?</b>",
       "It depends on the blockchain network. Some payments can take a few minutes.",
       "",
@@ -1273,8 +1715,9 @@ bot.action("deposit", async (ctx) => {
         `<b>Amount:</b> ${escapeHtml(payment.payAmount || "unknown")}`,
         `<b>Address:</b> <code>${escapeHtml(payment.payAddress || "unknown")}</code>`,
         `<b>Expires:</b> ${escapeHtml(expiresAt ? formatTimestamp(expiresAt) : "not updated yet")}`,
+        `<b>Expires in:</b> ${escapeHtml(formatTimeRemaining(expiresAt))}`,
         "",
-        "You can complete it, check the status, or cancel it to create a new one.",
+        "You can complete it, verify it, check the status, or cancel it to create a new one.",
       ].join("\n"),
       {
         parse_mode: "HTML",
@@ -1296,6 +1739,7 @@ bot.action("new_deposit", async (ctx) => {
 
   try {
     depositSessions.delete(String(ctx.from.id));
+    verificationSessions.delete(String(ctx.from.id));
     cancelPendingDepositsForUser(ctx.from.id, ctx.chat.id);
 
     await sendDepositCoinMenu(ctx);
@@ -1316,12 +1760,14 @@ bot.action(/^deposit_coin:(btc|eth|sol)$/, async (ctx) => {
   depositSessions.set(String(ctx.from.id), {
     coin,
   });
+  verificationSessions.delete(String(ctx.from.id));
 
   await ctx.reply(
     [
       `<b>Please enter the amount you would like to deposit in GBP using ${COINS[coin]}</b>`,
       "",
       "Your deposit will expire in 60 minutes.",
+      NETWORK_WARNINGS[coin],
       "",
       `The minimum amount to deposit is ${DISPLAY_CURRENCY_SYMBOL}20, anything under that will be voided and you will not recieve it in your wallet.`,
       "",
@@ -1330,6 +1776,7 @@ bot.action(/^deposit_coin:(btc|eth|sol)$/, async (ctx) => {
     {
       parse_mode: "HTML",
       reply_markup: mainMenuReplyMarkup([
+        [{ text: "Deposit Guide", callback_data: `deposit_guide:${coin}` }],
         [{ text: "Cancel Deposit", callback_data: "cancel_deposit" }],
       ]),
     }
@@ -1339,8 +1786,16 @@ bot.action(/^deposit_coin:(btc|eth|sol)$/, async (ctx) => {
 bot.action("withdraw", async (ctx) => {
   await ctx.answerCbQuery();
 
+  const balanceStats = getUserBalanceStats(ctx.from.id, ctx.chat.id);
+
   await ctx.reply(
-    "<b>Please select which way you would like to withdraw your funds.</b>",
+    [
+      "<b>Please select which way you would like to withdraw your funds.</b>",
+      "",
+      `Available balance: <b>${DISPLAY_CURRENCY_SYMBOL}${balanceStats.accountBalance.toFixed(2)}</b>`,
+      "",
+      "Withdrawals are reviewed manually for account safety.",
+    ].join("\n"),
     {
       parse_mode: "HTML",
       reply_markup: mainMenuReplyMarkup([
@@ -1354,8 +1809,17 @@ bot.action("withdraw", async (ctx) => {
 bot.action("withdraw_bank", async (ctx) => {
   await ctx.answerCbQuery();
 
+  const balanceStats = getUserBalanceStats(ctx.from.id, ctx.chat.id);
+
   await ctx.reply(
-    `<b>You have ${DISPLAY_CURRENCY_SYMBOL}0 funds to withdraw, please deposit using the menu above.</b>`,
+    [
+      "<b>🏦 Bank Transfer Withdrawal</b>",
+      "",
+      `Available balance: <b>${DISPLAY_CURRENCY_SYMBOL}${balanceStats.accountBalance.toFixed(2)}</b>`,
+      "",
+      "Withdrawals are currently reviewed manually.",
+      "Please contact @qevybtc and include your User ID, withdrawal method, and requested amount.",
+    ].join("\n"),
     {
       parse_mode: "HTML",
       reply_markup: mainMenuReplyMarkup(),
@@ -1366,8 +1830,17 @@ bot.action("withdraw_bank", async (ctx) => {
 bot.action("withdraw_crypto", async (ctx) => {
   await ctx.answerCbQuery();
 
+  const balanceStats = getUserBalanceStats(ctx.from.id, ctx.chat.id);
+
   await ctx.reply(
-    `<b>You have ${DISPLAY_CURRENCY_SYMBOL}0 funds to withdraw, please deposit using the menu above.</b>`,
+    [
+      "<b>🪙 Crypto Wallet Withdrawal</b>",
+      "",
+      `Available balance: <b>${DISPLAY_CURRENCY_SYMBOL}${balanceStats.accountBalance.toFixed(2)}</b>`,
+      "",
+      "Withdrawals are currently reviewed manually.",
+      "Please contact @qevybtc and include your User ID, wallet address, coin/network, and requested amount.",
+    ].join("\n"),
     {
       parse_mode: "HTML",
       reply_markup: mainMenuReplyMarkup(),
@@ -1451,6 +1924,40 @@ bot.action("risk_notice", async (ctx) => {
   );
 });
 
+bot.action(/^deposit_guide(?::(btc|eth|sol))?$/, async (ctx) => {
+  await ctx.answerCbQuery();
+
+  const coin = ctx.match && ctx.match[1] ? ctx.match[1] : "";
+
+  await ctx.reply(getDepositGuideLines(coin).join("\n"), {
+    parse_mode: "HTML",
+    reply_markup: mainMenuReplyMarkup(),
+  });
+});
+
+bot.action("new_to_crypto", async (ctx) => {
+  await ctx.answerCbQuery();
+
+  await ctx.reply(
+    [
+      "<b>🧑‍🏫 New To Crypto?</b>",
+      "",
+      "<b>Wallet address:</b> This is where you send crypto. Copy it exactly.",
+      "<b>Network:</b> This is the blockchain route. The coin and network must match.",
+      "<b>Transaction hash:</b> This is your payment receipt. Kevy uses it to verify your deposit.",
+      "",
+      "If you are unsure, send a small test transaction first or contact @qevybtc before sending funds.",
+    ].join("\n"),
+    {
+      parse_mode: "HTML",
+      reply_markup: mainMenuReplyMarkup([
+        [{ text: "Deposit Guide", callback_data: "deposit_guide" }],
+        [{ text: "How to buy crypto (easy)", callback_data: "how_to_buy_crypto_easy" }],
+      ]),
+    }
+  );
+});
+
 bot.action("how_to_buy_crypto", async (ctx) => {
   await ctx.answerCbQuery();
 
@@ -1474,11 +1981,14 @@ bot.action("help", async (ctx) => {
     [
       "<b>Help</b>",
       "",
-      "Kevy Trading Bot is built to help you deposit funds, track your account, access trading tools like Snipe Bot and Bot Filters, check your payment status, and get support whenever needed.",
+      "Kevy Trading Bot is built to help you deposit funds, track your account, access trading tools like Snipe Bot and Bot Filters, check your payment status, verify deposits with transaction hashes, and get support whenever needed.",
     ].join("\n"),
     {
       parse_mode: "HTML",
-      reply_markup: mainMenuReplyMarkup(),
+      reply_markup: mainMenuReplyMarkup([
+        [{ text: "New To Crypto?", callback_data: "new_to_crypto" }],
+        [{ text: "Deposit Guide", callback_data: "deposit_guide" }],
+      ]),
     }
   );
 });
@@ -1495,6 +2005,7 @@ bot.action("support", async (ctx) => {
       "Please include:",
       "User ID",
       "Payment ID",
+      "Transaction hash",
       "Issue",
     ].join("\n"),
     {
@@ -1606,6 +2117,7 @@ bot.action("cancel_deposit", async (ctx) => {
   await ctx.answerCbQuery();
 
   depositSessions.delete(String(ctx.from.id));
+  verificationSessions.delete(String(ctx.from.id));
 
   const cancelledDeposit = cancelLatestPendingDeposit(ctx.from.id, ctx.chat.id);
 
@@ -1658,11 +2170,171 @@ bot.action("check_deposit_status", async (ctx) => {
   });
 });
 
-bot.on("text", async (ctx, next) => {
-  const session = depositSessions.get(String(ctx.from.id));
+bot.action("submit_tx_hash", async (ctx) => {
+  await ctx.answerCbQuery();
 
-  if (!session) {
+  const pendingDeposit = getLatestPendingDepositEntry(ctx.from.id, ctx.chat.id);
+
+  if (!pendingDeposit) {
+    await ctx.reply("You do not have a pending deposit to verify.", {
+      reply_markup: mainMenuReplyMarkup([
+        [{ text: "Create New Deposit", callback_data: "new_deposit" }],
+      ]),
+    });
+    return;
+  }
+
+  const [paymentId, payment] = pendingDeposit;
+
+  verificationSessions.set(String(ctx.from.id), {
+    paymentId,
+  });
+  depositSessions.delete(String(ctx.from.id));
+
+  await ctx.reply(
+    [
+      "<b>Paste your transaction hash</b>",
+      "",
+      `Payment ID: <code>${escapeHtml(paymentId)}</code>`,
+      `Coin: ${escapeHtml((payment.coin || "unknown").toUpperCase())}`,
+      "",
+      "Kevy will check that the transaction was sent to the correct wallet address.",
+    ].join("\n"),
+    {
+      parse_mode: "HTML",
+      reply_markup: mainMenuReplyMarkup([
+        [{ text: "Cancel Deposit", callback_data: "cancel_deposit" }],
+      ]),
+    }
+  );
+});
+
+bot.on("text", async (ctx, next) => {
+  const depositSession = depositSessions.get(String(ctx.from.id));
+  const verificationSession = verificationSessions.get(String(ctx.from.id));
+
+  if (!depositSession && !verificationSession) {
     return next();
+  }
+
+  if (verificationSession) {
+    const txHash = ctx.message.text.trim();
+    const payments = loadPayments();
+    const payment = payments[verificationSession.paymentId];
+
+    if (!payment) {
+      verificationSessions.delete(String(ctx.from.id));
+      await ctx.reply("I could not find that pending deposit anymore. Please create a new one.", {
+        reply_markup: mainMenuReplyMarkup([
+          [{ text: "Create New Deposit", callback_data: "new_deposit" }],
+        ]),
+      });
+      return;
+    }
+
+    if (!isActiveUnpaidStatus(payment.status)) {
+      verificationSessions.delete(String(ctx.from.id));
+      await ctx.reply("This deposit is no longer pending.", {
+        reply_markup: mainMenuReplyMarkup(),
+      });
+      return;
+    }
+
+    if (transactionHashAlreadyUsed(txHash, verificationSession.paymentId)) {
+      await ctx.reply("This transaction hash has already been used for another deposit.", {
+        reply_markup: mainMenuReplyMarkup([
+          [{ text: "Check Deposit Status", callback_data: "check_deposit_status" }],
+        ]),
+      });
+      return;
+    }
+
+    await ctx.reply("Checking the blockchain now...");
+
+    try {
+      const result = await verifyBlockchainTransaction(payment.coin, txHash, payment.payAddress);
+
+      if (!result.ok) {
+        await ctx.reply(
+          [
+            "<b>Deposit not verified yet</b>",
+            "",
+            escapeHtml(result.detail),
+            "",
+            "Please check the transaction hash, make sure it is confirmed, then try again.",
+          ].join("\n"),
+          {
+            parse_mode: "HTML",
+            reply_markup: mainMenuReplyMarkup([
+              [{ text: "I Have Paid", callback_data: "submit_tx_hash" }],
+              [{ text: "Support", callback_data: "support" }],
+            ]),
+          }
+        );
+        return;
+      }
+
+      payment.status = "finished";
+      payment.updatedAt = new Date().toISOString();
+      payment.txHash = txHash;
+      payment.actuallyPaid = `${result.amount} ${result.currency}`;
+      payment.blockchainVerifiedAt = new Date().toISOString();
+      payment.blockchainVerificationDetail = result.detail;
+      payment.adminCompletionAlertSentAt = new Date().toISOString();
+
+      savePayments(payments);
+      verificationSessions.delete(String(ctx.from.id));
+
+      await sendAdminMessage(
+        [
+          "<b>✅ Blockchain deposit verified</b>",
+          "",
+          `Payment ID: <code>${escapeHtml(verificationSession.paymentId)}</code>`,
+          `User ID: <code>${escapeHtml(payment.telegramUserId || payment.chatId || "unknown")}</code>`,
+          `Username: ${escapeHtml(payment.telegramUsername || "none")}`,
+          `Name: ${escapeHtml(payment.telegramName || "unknown")}`,
+          `Coin: ${escapeHtml((payment.coin || "unknown").toUpperCase())}`,
+          `Requested amount: ${escapeHtml(payment.payAmount || "unknown")}`,
+          `Actually paid: ${escapeHtml(payment.actuallyPaid || "unknown")}`,
+          `TX Hash: <code>${escapeHtml(txHash)}</code>`,
+          `${EXPLORER_LINKS[payment.coin] || ""}${escapeHtml(txHash)}`,
+          `Verified: ${escapeHtml(formatTimestamp(payment.updatedAt))}`,
+        ].join("\n")
+      );
+
+      await ctx.reply(
+        [
+          "<b>✅ Deposit verified</b>",
+          "",
+          "Your deposit has been confirmed. Your account has been updated.",
+          "",
+          `Actually paid: ${escapeHtml(payment.actuallyPaid)}`,
+        ].join("\n"),
+        {
+          parse_mode: "HTML",
+          reply_markup: mainMenuReplyMarkup(),
+        }
+      );
+    } catch (error) {
+      console.error("Blockchain verification error:", error.response?.data || error.message);
+
+      await ctx.reply(
+        [
+          "<b>Verification error</b>",
+          "",
+          "Kevy could not check the blockchain right now. Please try again in a few minutes or contact @qevybtc.",
+        ].join("\n"),
+        {
+          parse_mode: "HTML",
+          reply_markup: mainMenuReplyMarkup([
+            [{ text: "I Have Paid", callback_data: "submit_tx_hash" }],
+            [{ text: "Support", callback_data: "support" }],
+          ]),
+        }
+      );
+    }
+
+    return;
   }
 
   const amountText = ctx.message.text.replace(/[£$,]/g, "").trim();
@@ -1678,7 +2350,7 @@ bot.on("text", async (ctx, next) => {
   }
 
   if (amount < 20) {
-    await ctx.reply(`Minimum deposit amount is 20 GBP. Please enter a higher amount.`, {
+    await ctx.reply("Minimum deposit amount is 20 GBP. Please enter a higher amount.", {
       reply_markup: mainMenuReplyMarkup([
         [{ text: "Cancel Deposit", callback_data: "cancel_deposit" }],
       ]),
@@ -1698,7 +2370,7 @@ bot.on("text", async (ctx, next) => {
   startPaymentCooldown(ctx.from.id);
   depositSessions.delete(String(ctx.from.id));
 
-  const coin = session.coin;
+  const coin = depositSession.coin;
   const chatId = ctx.chat.id;
   const orderId = `deposit_${chatId}_${Date.now()}`;
   const telegramUsername = ctx.from.username ? `@${ctx.from.username}` : "";
@@ -1759,8 +2431,7 @@ bot.on("text", async (ctx, next) => {
         "<b>Deposit Instructions</b>",
         "",
         "Your deposit will expire in 60 minutes.",
-        `Only send ${COINS[coin]} to this address.`,
-        "Do not send from the wrong network.",
+        NETWORK_WARNINGS[coin],
         `Deposits under ${DISPLAY_CURRENCY_SYMBOL}20 will not be credited.`,
         "",
         `<b>Send ${COINS[coin]} deposit to this address:</b>`,
@@ -1770,7 +2441,9 @@ bot.on("text", async (ctx, next) => {
         `<b>Amount:</b> <code>${DISPLAY_CURRENCY_SYMBOL}${amount} GBP</code>`,
         "",
         `<b>Payment ID:</b> <code>${escapeHtml(paymentId)}</code>`,
+        "<b>Keep this Payment ID safe. You may need it for support.</b>",
         `<b>Expires:</b> ${escapeHtml(formatTimestamp(expiresAt))}`,
+        `<b>Expires in:</b> ${escapeHtml(formatTimeRemaining(expiresAt))}`,
       ].join("\n"),
       {
         parse_mode: "HTML",
@@ -1791,9 +2464,11 @@ bot.on("text", async (ctx, next) => {
               },
             },
           ],
+          [{ text: "I Have Paid", callback_data: "submit_tx_hash" }],
           [{ text: "Check Deposit Status", callback_data: "check_deposit_status" }],
           [{ text: "Create New Deposit", callback_data: "new_deposit" }],
           [{ text: "Cancel Pending Deposit", callback_data: "cancel_deposit" }],
+          [{ text: "Deposit Guide", callback_data: `deposit_guide:${coin}` }],
           [{ text: "How to buy crypto (easy)", callback_data: "how_to_buy_crypto_easy" }],
         ]),
       }
